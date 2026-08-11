@@ -19,4 +19,5 @@
 
 pub mod config;
 pub mod error;
+pub mod operation;
 pub mod storage;
