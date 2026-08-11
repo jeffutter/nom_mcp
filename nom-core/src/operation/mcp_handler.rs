@@ -11,8 +11,8 @@ use rmcp::{
     ErrorData,
     handler::server::ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, ContentBlock, ListToolsResult, PaginatedRequestParams,
-        Tool,
+        CallToolRequestParams, CallToolResult, ContentBlock, ErrorCode, ListToolsResult,
+        PaginatedRequestParams, Tool,
     },
     service::RequestContext,
     RoleServer,
@@ -45,7 +45,10 @@ impl ServerHandler for McpHandler {
     // -- Tools --
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        self.registry.get(name).map(|op| tool_from_operation(op.as_ref()))
+        match self.registry.get(name) {
+            Some(op) => tool_from_operation(op.as_ref()).ok(),
+            None => None,
+        }
     }
 
     async fn list_tools(
@@ -57,7 +60,15 @@ impl ServerHandler for McpHandler {
             .registry
             .filter_by_surface(Surfaces::MCP)
             .iter()
-            .map(|op| tool_from_operation(op.as_ref()))
+            .filter_map(|op| {
+                tool_from_operation(op.as_ref()).map_err(|err| {
+                    tracing::warn!(
+                        operation = op.name(),
+                        error = %err,
+                        "skipping operation with invalid input_schema",
+                    );
+                }).ok()
+            })
             .collect();
         Ok(ListToolsResult::with_all_items(tools))
     }
@@ -97,7 +108,7 @@ impl ServerHandler for McpHandler {
 // Helper: build rmcp::Tool from an Operation reference
 // ---------------------------------------------------------------------------
 
-fn tool_from_operation(op: &dyn Operation) -> Tool {
+fn tool_from_operation(op: &dyn Operation) -> Result<Tool, ErrorData> {
     let input_schema = op.input_schema().unwrap_or_else(|| {
         serde_json::json!({
             "type": "object",
@@ -105,16 +116,19 @@ fn tool_from_operation(op: &dyn Operation) -> Tool {
         })
     });
 
-    // Extract JsonObject from schema value
+    // Extract JsonObject from schema value.
+    // If the operation returns a non-object schema, it violates the contract
+    // and we reject it gracefully rather than panicking.
     let schema = match input_schema {
         serde_json::Value::Object(obj) => Arc::new(obj),
-        other => panic!(
-            "input_schema must be a JSON object, got {:?}",
-            other
-        ),
+        other => return Err(ErrorData::new(
+            ErrorCode::INVALID_PARAMS,
+            format!("operation '{}' returned a non-object schema: {:?}", op.name(), other),
+            None,
+        )),
     };
 
-    Tool::new(op.name().to_string(), op.description().to_string(), schema)
+    Ok(Tool::new(op.name().to_string(), op.description().to_string(), schema))
 }
 
 #[cfg(test)]
@@ -137,6 +151,26 @@ mod tests {
         }
     }
 
+    /// Operation whose input_schema() returns a non-object JSON Value.
+    /// Used to verify graceful handling of malformed schemas.
+    struct BadSchemaOp;
+
+    #[async_trait::async_trait]
+    impl Operation for BadSchemaOp {
+        fn name(&self) -> &str { "bad-schema-op" }
+        fn description(&self) -> &str { "An operation with a broken schema" }
+        fn surfaces(&self) -> Surfaces { Surfaces::MCP }
+        fn input_schema(&self) -> Option<serde_json::Value> {
+            Some(serde_json::json!(["not", "an", "object"]))
+        }
+        async fn execute_json(
+            &self,
+            _args: Arc<serde_json::Value>,
+        ) -> Result<serde_json::Value, crate::error::ErrorData> {
+            Ok(serde_json::json!(null))
+        }
+    }
+
     #[test]
     fn test_mcp_handler_new() {
         let mut reg = OperationRegistry::new();
@@ -148,7 +182,7 @@ mod tests {
 
     #[test]
     fn test_tool_from_operation_has_required_fields() {
-        let tool = tool_from_operation(&TestOp);
+        let tool = tool_from_operation(&TestOp).unwrap();
         assert_eq!(tool.name.as_ref(), "test-op");
         assert_eq!(tool.description.as_deref(), Some("A test operation"));
     }
@@ -158,5 +192,41 @@ mod tests {
         let handler = McpHandler::new(OperationRegistry::new());
         // The handler should work even with an empty registry
         let _ = handler;
+    }
+
+    #[test]
+    fn test_bad_schema_does_not_panic() {
+        // tool_from_operation should return Err, not panic
+        let result = tool_from_operation(&BadSchemaOp);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("bad-schema-op"));
+        assert!(err.message.contains("non-object schema"));
+    }
+
+    #[test]
+    fn test_get_tool_skips_bad_schema() {
+        let mut reg = OperationRegistry::new();
+        reg.register(Arc::new(BadSchemaOp));
+        let handler = McpHandler::new(reg);
+        // get_tool should return None for operations with bad schemas (no panic)
+        assert!(handler.get_tool("bad-schema-op").is_none());
+    }
+
+    #[test]
+    fn test_list_tools_omits_bad_schema_but_keeps_good_ops() {
+        // Verify filter_map logic: collect tools skipping bad schemas
+        let mut reg = OperationRegistry::new();
+        reg.register(Arc::new(TestOp));
+        reg.register(Arc::new(BadSchemaOp));
+
+        let mcp_ops = reg.filter_by_surface(Surfaces::MCP);
+        let tools: Vec<_> = mcp_ops.iter()
+            .filter_map(|op| tool_from_operation(op.as_ref()).ok())
+            .collect();
+
+        // Should have exactly 1 tool (the good one), not 2
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name.as_ref(), "test-op");
     }
 }
