@@ -1,0 +1,37 @@
+# nom_mcp
+
+A single-user Rust MCP server for tracking food, nutrition, and body weight — exposed identically over MCP, local CLI, HTTP, and a remote-CLI thin client.
+
+## Language
+
+**Meal**:
+Any logged eating occasion — a full dinner, a snack, a single protein bar. Composed of zero or more Portions plus an optional raw-macro adjustment for anything that doesn't map to a catalog Food; total macros are the sum of both.
+_Avoid_: Log Entry, Food Log
+
+**Food**:
+A nutrition reference — a name plus macros per serving. One entity type with a `source` discriminator: OpenFoodFacts (barcode), USDA FDC (whole/raw foods), or Custom (user-defined, for dishes uncatalogued in either source). Custom Foods are not a separate type — they share the same shape and are reused the same way once defined.
+_Avoid_: Product, Item, CustomFood (as a distinct type)
+
+**Portion**:
+A quantity of a specific Food included in a Meal — e.g. "150g of Food X" or "2 servings of Food Y". Links a Meal to a Food plus an amount.
+_Avoid_: Serving (reserved for a Food's own reference serving size, not the amount consumed), MealItem
+
+**Weight Entry**:
+A single body-weight measurement logged at a point in time. Distinct from Meal — not composed of Portions or Foods.
+_Avoid_: Weigh-in
+
+**Goal**:
+A user-set daily target for calories, macros, and fiber, tracked against logged Meals to compute progress. Each nutrient target carries an explicit Direction. Distinct from a Weight Entry's target weight, which is part of Goal, not a separate concept and carries no Direction — progress toward it is read directly off the comparison to the latest Weight Entry.
+_Avoid_: Limit (ambiguous on its own — Direction says whether a target is a ceiling, floor, or exact aim)
+
+**Direction**:
+Whether one of a Goal's nutrient targets is an exact aim, a floor to reach, or a ceiling not to exceed. Set explicitly the first time a nutrient is targeted; never inferred or defaulted, since nothing about a bare number says whether hitting it or staying under it is the win.
+_Avoid_: Type, mode
+
+**Weekly Summary**:
+The MCP Resource surfacing a rolling 7-day nutrition and weight snapshot: daily-average nutrient consumption vs Goal targets (plus a per-day breakdown) alongside a weight trend (start/end/delta within the window, or the latest known Weight Entry if none was logged this week). MCP-only — no CLI/HTTP equivalent, since it has no Operation shape.
+_Avoid_: Weekly Report, Dashboard
+
+**Widget Display**:
+A single global on/off user preference, settable only via MCP (no CLI/HTTP equivalent), that will govern whether an MCP client renders visual widgets instead of plain text/JSON. Persisted in its own settings storage, separate from startup Config. v1 stores and exposes it but no tool or Resource output branches on it yet.
+_Avoid_: Widget Toggle (names the action of flipping it, not the preference itself)
