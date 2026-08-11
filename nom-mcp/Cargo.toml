@@ -14,3 +14,4 @@ path = "src/bin/nom-mcp-remote.rs"
 
 [dependencies]
 nom-core = { path = "../nom-core" }
+serde_json = "1"
