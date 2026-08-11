@@ -119,9 +119,7 @@ impl AppConfig {
 
         // Add TOML config file if the path resolves
         if let Some(path) = config_path() {
-            builder = builder.add_source(
-                config::File::from(path).required(false),
-            );
+            builder = builder.add_source(config::File::from(path).required(false));
         }
 
         // Environment variables always win (highest priority).
@@ -153,7 +151,9 @@ fn config_path() -> Option<PathBuf> {
         .ok()
         .map(PathBuf::from)
         .or_else(|| {
-            std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".config"))
+            std::env::var("HOME")
+                .ok()
+                .map(|h| PathBuf::from(h).join(".config"))
         })?;
 
     let path = config_home.join("nom_mcp").join("config.toml");
@@ -252,6 +252,7 @@ mod tests {
 
     // -- Config load tests --
 
+    #[serial_test::serial]
     #[test]
     fn test_load_with_no_config_file_or_env() {
         // This test works because config-rs won't find a config file
@@ -264,6 +265,7 @@ mod tests {
         assert!(config.remote.server_url.is_none());
     }
 
+    #[serial_test::serial]
     #[test]
     fn test_usda_key_is_redacted_in_debug() {
         let config = AppConfig::load().expect("should load");
@@ -301,7 +303,8 @@ mod tests {
         fn new() -> Self {
             Self {
                 temp_dir: None,
-                saved_xdg: std::env::var_os("XDG_CONFIG_HOME").map(|v| v.to_string_lossy().to_string()),
+                saved_xdg: std::env::var_os("XDG_CONFIG_HOME")
+                    .map(|v| v.to_string_lossy().to_string()),
                 cleared_vars: Vec::new(),
             }
         }
