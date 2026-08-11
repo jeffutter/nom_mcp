@@ -1,0 +1,70 @@
+name: CI # Continuous Integration
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+          workspaces: ". -> target"
+      - name: Run tests
+        run: nix develop .#ci -c cargo test --all-features --workspace
+
+  rustfmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rustfmt
+          workspaces: ". -> target"
+      - name: Check formatting
+        run: nix develop .#ci -c cargo fmt --all --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: clippy
+          workspaces: ". -> target"
+      - name: Clippy check
+        run: nix develop .#ci -c cargo clippy --all-targets --all-features --workspace -- -D warnings
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: docs
+          workspaces: ". -> target"
+      - name: Check documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: nix develop .#ci -c cargo doc --no-deps --document-private-items --all-features --workspace --examples
