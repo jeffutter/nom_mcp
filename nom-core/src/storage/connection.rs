@@ -27,20 +27,24 @@ impl Connection {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
-                StorageError::Io(format!("failed to create directory {}: {e}", parent.display()))
+                StorageError::Io(format!(
+                    "failed to create directory {}: {e}",
+                    parent.display()
+                ))
             })?;
         }
 
-        let db = Builder::new_local(path.to_str().ok_or_else(|| {
-            StorageError::Io("database path contains invalid UTF-8".to_string())
-        })?)
-        .build()
-        .await
-        .map_err(|e| StorageError::Database(format!("failed to build database: {e}")))?;
+        let db =
+            Builder::new_local(path.to_str().ok_or_else(|| {
+                StorageError::Io("database path contains invalid UTF-8".to_string())
+            })?)
+            .build()
+            .await
+            .map_err(|e| StorageError::Database(format!("failed to build database: {e}")))?;
 
-        let conn = db.connect().map_err(|e| {
-            StorageError::Database(format!("failed to connect: {e}"))
-        })?;
+        let conn = db
+            .connect()
+            .map_err(|e| StorageError::Database(format!("failed to connect: {e}")))?;
 
         // Enable foreign key enforcement
         conn.execute("PRAGMA foreign_keys = ON", ())
@@ -61,12 +65,16 @@ impl Connection {
     /// releasing the connection to prevent WAL data loss on crash.
     pub async fn checkpoint(&self) -> Result<(), StorageError> {
         // PRAGMA wal_checkpoint(TRUNCATE) checkpoints and then truncates the WAL file.
+        // It returns a (busy, log, checkpointed) row rather than a bare status, so it
+        // must be run as a query, not an exec — exec fails with "unexpected row".
         self.inner
-            .execute("PRAGMA wal_checkpoint(TRUNCATE)", ())
+            .query("PRAGMA wal_checkpoint(TRUNCATE)", ())
             .await
-            .ok();
+            .map_err(|e| StorageError::Database(format!("wal checkpoint failed: {e}")))?;
         // Also flush the cache
-        self.inner.cacheflush().ok();
+        self.inner
+            .cacheflush()
+            .map_err(|e| StorageError::Database(format!("cache flush failed: {e}")))?;
         Ok(())
     }
 
@@ -76,23 +84,26 @@ impl Connection {
         sql: &str,
         params: impl turso::IntoParams,
     ) -> Result<u64, StorageError> {
-        self.inner.execute(sql, params).await.map_err(|e| {
-            StorageError::Query(format!("query failed: {e}"))
-        })
+        self.inner
+            .execute(sql, params)
+            .await
+            .map_err(|e| StorageError::Query(format!("query failed: {e}")))
     }
 
     /// Prepare a statement for later execution.
     pub async fn prepare(&self, sql: &str) -> Result<turso::Statement, StorageError> {
-        self.inner.prepare(sql).await.map_err(|e| {
-            StorageError::Query(format!("prepare failed: {e}"))
-        })
+        self.inner
+            .prepare(sql)
+            .await
+            .map_err(|e| StorageError::Query(format!("prepare failed: {e}")))
     }
 
     /// Execute a batch of SQL statements.
     pub async fn execute_batch(&self, sql: &str) -> Result<(), StorageError> {
-        self.inner.execute_batch(sql).await.map_err(|e| {
-            StorageError::Query(format!("batch failed: {e}"))
-        })
+        self.inner
+            .execute_batch(sql)
+            .await
+            .map_err(|e| StorageError::Query(format!("batch failed: {e}")))
     }
 
     /// Query rows.
@@ -101,9 +112,10 @@ impl Connection {
         sql: &str,
         params: impl turso::IntoParams,
     ) -> Result<turso::Rows, StorageError> {
-        self.inner.query(sql, params).await.map_err(|e| {
-            StorageError::Query(format!("query failed: {e}"))
-        })
+        self.inner
+            .query(sql, params)
+            .await
+            .map_err(|e| StorageError::Query(format!("query failed: {e}")))
     }
 
     /// Get the underlying turso connection (for advanced operations).

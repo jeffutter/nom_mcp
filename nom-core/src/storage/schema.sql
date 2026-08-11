@@ -86,10 +86,3 @@ CREATE INDEX IF NOT EXISTS idx_meals_logged_date ON meals(logged_date);
 CREATE INDEX IF NOT EXISTS idx_portions_meal_id ON portions(meal_id);
 CREATE INDEX IF NOT EXISTS idx_weight_entries_logged_date ON weight_entries(logged_date);
 CREATE INDEX IF NOT EXISTS idx_goals_effective_from ON goals(effective_from);
-
--- Migration tracking table (geni pattern)
-CREATE TABLE IF NOT EXISTS _migrations (
-    version INTEGER PRIMARY KEY,
-    hash TEXT NOT NULL,
-    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-);

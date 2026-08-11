@@ -30,8 +30,7 @@ fn hash_v1() -> String {
 /// 8. Checkpoint WAL after migration completes
 pub async fn run(conn: &mut Connection) -> Result<(), StorageError> {
     // Disable FK checks during DDL (SQLite requires this for schema changes)
-    conn.execute("PRAGMA foreign_keys = OFF", ())
-        .await?;
+    conn.execute("PRAGMA foreign_keys = OFF", ()).await?;
 
     // Begin transaction
     conn.execute("BEGIN TRANSACTION", ()).await?;
@@ -57,8 +56,7 @@ pub async fn run(conn: &mut Connection) -> Result<(), StorageError> {
     conn.execute("COMMIT", ()).await?;
 
     // Re-enable FK checks
-    conn.execute("PRAGMA foreign_keys = ON", ())
-        .await?;
+    conn.execute("PRAGMA foreign_keys = ON", ()).await?;
 
     // Checkpoint WAL after migration completes
     conn.checkpoint().await?;
@@ -68,16 +66,19 @@ pub async fn run(conn: &mut Connection) -> Result<(), StorageError> {
 
 async fn get_max_version(conn: &Connection) -> Result<i32, StorageError> {
     let mut stmt = conn.prepare("SELECT MAX(version) FROM _migrations").await?;
-    let mut rows = stmt.query(()).await.map_err(|e| {
-        StorageError::Query(format!("failed to query max version: {e}"))
-    })?;
+    let mut rows = stmt
+        .query(())
+        .await
+        .map_err(|e| StorageError::Query(format!("failed to query max version: {e}")))?;
 
-    if let Some(row) = rows.next().await.map_err(|e| {
-        StorageError::Query(format!("failed to read row: {e}"))
-    })? {
-        let value = row.get_value(0).map_err(|e| {
-            StorageError::Query(format!("failed to get value: {e}"))
-        })?;
+    if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| StorageError::Query(format!("failed to read row: {e}")))?
+    {
+        let value = row
+            .get_value(0)
+            .map_err(|e| StorageError::Query(format!("failed to get value: {e}")))?;
         match value {
             turso::Value::Integer(v) => Ok(v as i32),
             turso::Value::Null => Ok(0),

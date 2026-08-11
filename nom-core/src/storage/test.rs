@@ -2,7 +2,6 @@
 
 use super::{Connection, StorageError};
 use tempfile::TempDir;
-use tokio::test;
 
 /// Helper: create a temporary directory and open a connection at a path inside it.
 async fn open_temp_db() -> Result<(Connection, TempDir), StorageError> {
@@ -27,15 +26,16 @@ async fn test_all_six_tables_created() -> Result<(), StorageError> {
     ];
 
     for table in &tables {
-        let mut stmt = conn.prepare(&format!(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='{}'",
-            table
-        ))
-        .await?;
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='{}'",
+                table
+            ))
+            .await?;
         let mut rows = stmt.query(()).await?;
         let row = rows.next().await?.expect("should have a row");
         let count = match row.get_value(0)? {
-            turso::Value::Integer(v) => v as i64,
+            turso::Value::Integer(v) => v,
             other => panic!("unexpected value type: {:?}", other),
         };
         assert_eq!(count, 1, "table {} should exist", table);
@@ -64,7 +64,7 @@ async fn test_indexes_exist() -> Result<(), StorageError> {
         let mut rows = stmt.query(()).await?;
         let row = rows.next().await?.expect("should have a row");
         let count = match row.get_value(0)? {
-            turso::Value::Integer(v) => v as i64,
+            turso::Value::Integer(v) => v,
             other => panic!("unexpected value type: {:?}", other),
         };
         assert_eq!(count, 1, "index {} on {} should exist", name, tbl);
@@ -95,17 +95,24 @@ async fn test_migrations_table_has_version_entry() -> Result<(), StorageError> {
     let (conn, _dir) = open_temp_db().await?;
 
     // Check _migrations table has exactly one entry for version 1
-    let mut stmt = conn.prepare("SELECT COUNT(*) FROM _migrations WHERE version = 1").await?;
+    let mut stmt = conn
+        .prepare("SELECT COUNT(*) FROM _migrations WHERE version = 1")
+        .await?;
     let mut rows = stmt.query(()).await?;
     let row = rows.next().await?.expect("should have a row");
     let count = match row.get_value(0)? {
-        turso::Value::Integer(v) => v as i64,
+        turso::Value::Integer(v) => v,
         other => panic!("unexpected value type: {:?}", other),
     };
-    assert_eq!(count, 1, "_migrations should have exactly one entry for version 1");
+    assert_eq!(
+        count, 1,
+        "_migrations should have exactly one entry for version 1"
+    );
 
     // Verify hash is non-empty
-    let mut stmt = conn.prepare("SELECT hash FROM _migrations WHERE version = 1").await?;
+    let mut stmt = conn
+        .prepare("SELECT hash FROM _migrations WHERE version = 1")
+        .await?;
     let mut rows = stmt.query(()).await?;
     let row = rows.next().await?.expect("should have a row");
     let hash = match row.get_value(0)? {
@@ -138,10 +145,13 @@ async fn test_migration_idempotency() -> Result<(), StorageError> {
     let mut rows = stmt.query(()).await?;
     let row = rows.next().await?.expect("should have a row");
     let count = match row.get_value(0)? {
-        turso::Value::Integer(v) => v as i64,
+        turso::Value::Integer(v) => v,
         other => panic!("unexpected value type: {:?}", other),
     };
-    assert_eq!(count, 1, "should still have exactly one migration entry after re-open");
+    assert_eq!(
+        count, 1,
+        "should still have exactly one migration entry after re-open"
+    );
 
     Ok(())
 }
