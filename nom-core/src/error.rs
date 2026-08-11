@@ -274,7 +274,10 @@ mod tests {
     #[test]
     fn test_render_lock_probe() {
         let (msg, code) = render_error(&ErrorData::conflict("local_db_locked"));
-        assert_eq!(msg, "server is running — stop it or use the remote-CLI instead");
+        assert_eq!(
+            msg,
+            "server is running — stop it or use the remote-CLI instead"
+        );
         assert_eq!(code, 5);
     }
 

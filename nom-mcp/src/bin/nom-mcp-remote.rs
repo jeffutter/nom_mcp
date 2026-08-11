@@ -8,13 +8,16 @@ use nom_core::error::{ErrorData, render_error};
 fn main() {
     // TODO: parse server URL from config/env, make HTTP request to remote server.
     // For now, demonstrate the error path with a placeholder.
-    
+
     // Simulate fetching result from remote server
     let response = fetch_from_server();
-    
+
     match response {
         Ok(value) => {
-            println!("{}", serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()));
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
+            );
         }
         Err(error) => {
             let (message, exit_code) = render_error(&error);

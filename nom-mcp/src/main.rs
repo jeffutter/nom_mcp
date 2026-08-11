@@ -7,10 +7,13 @@ use nom_core::error::{ErrorData, render_error};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    
+
     match execute_from_args(&args) {
         Ok(value) => {
-            println!("{}", serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()));
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
+            );
         }
         Err(error) => {
             let (message, exit_code) = render_error(&error);
