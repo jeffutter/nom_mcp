@@ -12,19 +12,14 @@ use super::{Operation, Surfaces};
 
 /// Build a clap Command tree from operations that expose CLI surface.
 pub fn build_cli_command(registry: &super::OperationRegistry) -> Command {
-    let mut cmd = Command::new("nom-mcp")
-        .about("NOM nutrition tracker — local CLI mode");
+    let mut cmd = Command::new("nom-mcp").about("NOM nutrition tracker — local CLI mode");
 
     for op in registry.filter_by_surface(Surfaces::CLI) {
         let name: &'static str = Box::leak(op.name().to_string().into_boxed_str());
         let desc: &'static str = Box::leak(op.description().to_string().into_boxed_str());
         let subcmd = Command::new(name)
             .about(desc)
-            .arg(
-                Arg::new("args")
-                    .num_args(0..)
-                    .action(ArgAction::Set),
-            );
+            .arg(Arg::new("args").num_args(0..).action(ArgAction::Set));
         cmd = cmd.subcommand(subcmd);
     }
 
@@ -40,9 +35,10 @@ pub fn parse_and_dispatch(
     args: &[String],
 ) -> Result<(Arc<dyn Operation>, Arc<serde_json::Value>), crate::error::ErrorData> {
     let cmd = build_cli_command(registry);
-    let matches = cmd.clone().try_get_matches_from(args).map_err(|e| {
-        crate::error::ErrorData::validation("arguments", e.to_string())
-    })?;
+    let matches = cmd
+        .clone()
+        .try_get_matches_from(args)
+        .map_err(|e| crate::error::ErrorData::validation("arguments", e.to_string()))?;
 
     // Extract subcommand name
     let subcommand_name = matches
@@ -99,9 +95,15 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Operation for TestOp {
-        fn name(&self) -> &str { self.name }
-        fn description(&self) -> &str { "test" }
-        fn surfaces(&self) -> Surfaces { self.surfaces }
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn description(&self) -> &str {
+            "test"
+        }
+        fn surfaces(&self) -> Surfaces {
+            self.surfaces
+        }
         async fn execute_json(
             &self,
             _args: Arc<serde_json::Value>,

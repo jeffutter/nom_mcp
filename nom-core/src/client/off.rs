@@ -96,9 +96,7 @@ impl OffClient {
     /// provided user-agent string (typically from config).
     pub fn new(base_url: &str, user_agent: &str) -> Result<Self, OffError> {
         let url = Url::parse(base_url)?;
-        let http = reqwest::Client::builder()
-            .user_agent(user_agent)
-            .build()?;
+        let http = reqwest::Client::builder().user_agent(user_agent).build()?;
         Ok(Self {
             http,
             base_url: url,
@@ -156,8 +154,8 @@ impl OffClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{header, method};
     use wiremock::{Mock, ResponseTemplate};
-    use wiremock::matchers::{method, header};
 
     // -- Serde deserialization tests --
 

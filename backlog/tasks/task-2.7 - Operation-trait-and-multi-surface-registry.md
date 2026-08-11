@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@ralph'
 created_date: '2026-08-11 13:23'
-updated_date: '2026-08-11 22:25'
+updated_date: '2026-08-11 23:14'
 labels:
   - planned
 dependencies:
@@ -184,9 +184,7 @@ Update  to support both modes:
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-## Implementation Notes\n\nFixed compilation errors in the operation module:\n\n1. **cli_router.rs**:  had lifetime issues - clap's  requires  strings but operations return borrowed . Fixed by boxing and leaking owned strings (acceptable for CLI tools where the command tree lives for the process duration).\n\n2. **http_router.rs**: Replaced  extractor with closure-captured  per route. The original design used static routes but tried to extract path parameters that didn't exist. Now each route captures its operation directly.\n\n3. **mcp_handler.rs**: Removed unused  import.\n\n4. **Test fixes**: Added  to all test impls of , fixed missing  in http_router tests, fixed iterator  issue in cli_router tests, fixed closure borrowing issue in mcp_handler tests.
-
-Fixed compilation errors: cli_router lifetime (Box::leak for static strings), http_router route capture pattern, mcp_handler unused import, test async_trait annotations.
+Fixup applied post-review (commit f73ab93, fixup! 4a5bce2): http_router::handle_operation was discarding the ErrorData body on error, returning only a bare StatusCode with an empty response — contradicting this module's own doc comment and the Phase 4 implementation plan ('serialize ErrorData as response body so remote-CLI can deserialize it through the same path'). Fixed to serialize the ErrorData JSON body alongside the status code; added test_handle_operation_error_serializes_error_data_body to cover it. All 67 nom-core tests + clippy -D warnings pass.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

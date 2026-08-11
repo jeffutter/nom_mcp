@@ -7,11 +7,7 @@
 
 use std::sync::Arc;
 
-use axum::{
-    http::StatusCode,
-    routing::post,
-    Json, Router,
-};
+use axum::{Json, Router, http::StatusCode, routing::post};
 
 use super::Surfaces;
 
@@ -26,9 +22,10 @@ pub fn build_http_router(registry: super::OperationRegistry) -> Router {
     for op in registry.filter_by_surface(Surfaces::HTTP) {
         let op = op.clone();
         let path = format!("/api/{}", op.name());
-        router = router.route(&path, post(move |Json(args): Json<serde_json::Value>| {
-            handle_operation(op, args)
-        }));
+        router = router.route(
+            &path,
+            post(move |Json(args): Json<serde_json::Value>| handle_operation(op, args)),
+        );
     }
 
     router
@@ -58,9 +55,15 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Operation for TestOp {
-        fn name(&self) -> &str { "test-op" }
-        fn description(&self) -> &str { "test" }
-        fn surfaces(&self) -> Surfaces { Surfaces::HTTP }
+        fn name(&self) -> &str {
+            "test-op"
+        }
+        fn description(&self) -> &str {
+            "test"
+        }
+        fn surfaces(&self) -> Surfaces {
+            Surfaces::HTTP
+        }
         async fn execute_json(
             &self,
             args: Arc<serde_json::Value>,
@@ -83,9 +86,15 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Operation for FailOp {
-        fn name(&self) -> &str { "fail-op" }
-        fn description(&self) -> &str { "test" }
-        fn surfaces(&self) -> Surfaces { Surfaces::HTTP }
+        fn name(&self) -> &str {
+            "fail-op"
+        }
+        fn description(&self) -> &str {
+            "test"
+        }
+        fn surfaces(&self) -> Surfaces {
+            Surfaces::HTTP
+        }
         async fn execute_json(
             &self,
             _args: Arc<serde_json::Value>,
@@ -96,8 +105,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_operation_error_serializes_error_data_body() {
-        let (status, Json(body)) =
-            handle_operation(Arc::new(FailOp), serde_json::json!({})).await;
+        let (status, Json(body)) = handle_operation(Arc::new(FailOp), serde_json::json!({})).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(body["category"], "NotFound");
     }

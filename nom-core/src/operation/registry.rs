@@ -174,8 +174,12 @@ mod tests {
 
         #[async_trait::async_trait]
         impl Operation for DefaultSurfacesOp {
-            fn name(&self) -> &str { "default_surfaces" }
-            fn description(&self) -> &str { "Uses default surfaces" }
+            fn name(&self) -> &str {
+                "default_surfaces"
+            }
+            fn description(&self) -> &str {
+                "Uses default surfaces"
+            }
             // Does not override surfaces() — should default to ALL
             async fn execute_json(
                 &self,

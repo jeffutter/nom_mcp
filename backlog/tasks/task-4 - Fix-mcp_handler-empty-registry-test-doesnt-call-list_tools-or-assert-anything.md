@@ -7,7 +7,7 @@ status: Done
 assignee:
   - '@ralph'
 created_date: '2026-08-11 23:15'
-updated_date: '2026-08-11 23:48'
+updated_date: '2026-08-11 23:54'
 labels:
   - review-followup
 dependencies:
@@ -55,6 +55,8 @@ Note: this repo's actual layout is nom-core/ (library) and nom-mcp/ (binaries), 
 
 <!-- SECTION:NOTES:BEGIN -->
 Extracted tool-building logic into McpHandler::build_tools() helper (pub(crate)) so list_tools() delegates to it and the empty-registry test can actually invoke and assert on the result without needing RequestContext<RoleServer>. Rewrote test_empty_registry_list_tools to call build_tools() and assert tools.is_empty(). All 70 tests pass.
+
+Fixup applied post-review (commit a2f3669, fixup! cf541c8): build_tools() had a broken indentation (rustfmt violation) and test_list_tools_omits_bad_schema_but_keeps_good_ops duplicated the filter_map logic build_tools() now encapsulates instead of calling it. Reformatted and rewired the test to call handler.build_tools() directly.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
