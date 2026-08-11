@@ -20,8 +20,11 @@ thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 tower-http = "0.7.0"
 turso = "0.8.0-pre.4"
+url = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 [dev-dependencies]
 serial_test = "3"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt"] }
+wiremock = "0.6"
