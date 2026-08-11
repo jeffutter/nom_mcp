@@ -5,3 +5,5 @@ target/
 
 # Nix build artifacts
 result
+
+.pi/ralph/
