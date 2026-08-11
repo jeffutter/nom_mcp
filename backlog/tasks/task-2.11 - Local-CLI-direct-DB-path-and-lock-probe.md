@@ -8,7 +8,6 @@ labels: []
 dependencies:
   - TASK-2.5
   - TASK-2.7
-parent_task_id: TASK-2
 type: feature
 ordinal: 30000
 ---

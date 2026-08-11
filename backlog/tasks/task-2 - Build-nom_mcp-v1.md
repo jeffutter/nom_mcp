@@ -4,8 +4,27 @@ title: Build nom_mcp v1
 status: To Do
 assignee: []
 created_date: '2026-08-11 13:22'
+updated_date: '2026-08-11 13:53'
 labels: []
-dependencies: []
+dependencies:
+  - TASK-2.1
+  - TASK-2.2
+  - TASK-2.3
+  - TASK-2.4
+  - TASK-2.5
+  - TASK-2.6
+  - TASK-2.7
+  - TASK-2.8
+  - TASK-2.9
+  - TASK-2.10
+  - TASK-2.11
+  - TASK-2.12
+  - TASK-2.13
+  - TASK-2.14
+  - TASK-2.15
+  - TASK-2.16
+  - TASK-2.17
+  - TASK-2.18
 documentation:
   - doc-5
 type: feature

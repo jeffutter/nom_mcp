@@ -12,7 +12,6 @@ dependencies:
   - TASK-2.7
   - TASK-2.10
   - TASK-2.13
-parent_task_id: TASK-2
 type: feature
 ordinal: 33000
 ---

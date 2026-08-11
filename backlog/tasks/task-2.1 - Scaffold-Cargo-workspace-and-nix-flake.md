@@ -6,7 +6,6 @@ assignee: []
 created_date: '2026-08-11 13:22'
 labels: []
 dependencies: []
-parent_task_id: TASK-2
 type: chore
 ordinal: 20000
 ---

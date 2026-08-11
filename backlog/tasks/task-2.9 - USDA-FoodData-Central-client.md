@@ -7,7 +7,6 @@ created_date: '2026-08-11 13:23'
 labels: []
 dependencies:
   - TASK-2.3
-parent_task_id: TASK-2
 type: feature
 ordinal: 28000
 ---
