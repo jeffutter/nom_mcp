@@ -6,6 +6,9 @@
 use nom_core::error::{ErrorData, cli_exit};
 
 fn main() {
+    // Initialize tracing for CLI mode (best-effort; failure doesn't crash)
+    let _ = nom_core::logging::init_cli();
+
     let args: Vec<String> = std::env::args().collect();
     cli_exit(execute_from_args(&args));
 }

@@ -8,6 +8,9 @@
 use nom_core::error::{ErrorData, cli_exit};
 
 fn main() {
+    // Initialize tracing for CLI mode (best-effort; failure doesn't crash)
+    let _ = nom_core::logging::init_cli();
+
     // TODO: parse server URL from config/env, make HTTP request to remote server.
     // For now, demonstrate the error path with a placeholder.
     cli_exit(fetch_from_server());

@@ -1927,6 +1927,8 @@ dependencies = [
  "thiserror",
  "tokio",
  "tower-http 0.7.0",
+ "tracing",
+ "tracing-subscriber",
  "turso",
  "url",
  "wiremock",
