@@ -18,7 +18,3 @@
 //! - `error` — unified ErrorData taxonomy
 
 pub mod error;
-
-pub fn hello() -> &'static str {
-    "nom-core"
-}
