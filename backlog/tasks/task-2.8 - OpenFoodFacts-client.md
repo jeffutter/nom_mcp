@@ -215,3 +215,9 @@ AC #1 ✓ — lookup_barcode() performs GET against configurable base URL, deser
 AC #2 ✓ — User-Agent header set from constructor param via reqwest Client builder; default comes from AppConfig::default_off_user_agent()
 AC #3 ✓ — base_url is a constructor parameter (OffClient::new(base_url, user_agent)), never a compiled-in constant; tests use wiremock server URI
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented OpenFoodFacts REST client in nom-core/src/client/off.rs with all three acceptance criteria met: (1) barcode lookup against configurable base URL deserializing kcal/protein/carbs/fat/fiber + serving basis via hand-scoped serde structs, (2) User-Agent header from config with nom_mcp/<version> default, (3) base URL as constructor parameter not compiled-in constant. Added reqwest (rustls-tls) and url dependencies plus wiremock dev-dependency. 13 tests pass including unit tests for serde deserialization and wiremock integration tests for success/not-found/barcode-normalization/error scenarios.
+<!-- SECTION:FINAL_SUMMARY:END -->

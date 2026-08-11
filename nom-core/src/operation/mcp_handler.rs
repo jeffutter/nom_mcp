@@ -34,6 +34,24 @@ impl McpHandler {
             registry: Arc::new(registry),
         }
     }
+
+    /// Build the list of tools from the registry, filtering by MCP surface
+    /// and skipping operations with invalid schemas.
+pub(crate) fn build_tools(&self) -> Vec<Tool> {
+        self.registry
+            .filter_by_surface(Surfaces::MCP)
+            .iter()
+            .filter_map(|op| {
+                tool_from_operation(op.as_ref()).map_err(|err| {
+                    tracing::warn!(
+                        operation = op.name(),
+                        error = %err,
+                        "skipping operation with invalid input_schema",
+                    );
+                }).ok()
+            })
+            .collect()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -56,20 +74,7 @@ impl ServerHandler for McpHandler {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let tools = self
-            .registry
-            .filter_by_surface(Surfaces::MCP)
-            .iter()
-            .filter_map(|op| {
-                tool_from_operation(op.as_ref()).map_err(|err| {
-                    tracing::warn!(
-                        operation = op.name(),
-                        error = %err,
-                        "skipping operation with invalid input_schema",
-                    );
-                }).ok()
-            })
-            .collect();
+        let tools = self.build_tools();
         Ok(ListToolsResult::with_all_items(tools))
     }
 
@@ -190,8 +195,8 @@ mod tests {
     #[test]
     fn test_empty_registry_list_tools() {
         let handler = McpHandler::new(OperationRegistry::new());
-        // The handler should work even with an empty registry
-        let _ = handler;
+        let tools = handler.build_tools();
+        assert!(tools.is_empty(), "empty registry should produce no tools");
     }
 
     #[test]
