@@ -1,0 +1,7 @@
+# Rust
+target/
+**/*.rs.bk
+.cargo/
+
+# Nix build artifacts
+result

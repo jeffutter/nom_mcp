@@ -1,0 +1,16 @@
+[package]
+name = "nom-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "nom-mcp"
+path = "src/main.rs"
+
+[[bin]]
+name = "nom-mcp-remote"
+path = "src/bin/nom-mcp-remote.rs"
+
+[dependencies]
+nom-core = { path = "../nom-core" }
