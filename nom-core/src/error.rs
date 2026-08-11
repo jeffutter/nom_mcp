@@ -164,6 +164,33 @@ pub fn render_error(error: &ErrorData) -> (String, i32) {
     (message, exit_code)
 }
 
+// ---------------------------------------------------------------------------
+// Shared CLI exit path — turns a CLI operation's Result into stdout/stderr
+// output and a process exit, identically for local-CLI and remote-CLI.
+// ---------------------------------------------------------------------------
+
+/// Pretty-print a successful CLI result as JSON, falling back to `Value`'s
+/// default `Display` if serialization somehow fails.
+pub fn format_success(value: &serde_json::Value) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+}
+
+/// Print a CLI operation's result and exit with the appropriate code.
+/// Shared by local-CLI and remote-CLI so their output is identical.
+pub fn cli_exit(result: Result<serde_json::Value, ErrorData>) -> ! {
+    match result {
+        Ok(value) => {
+            println!("{}", format_success(&value));
+            std::process::exit(0);
+        }
+        Err(error) => {
+            let (message, exit_code) = render_error(&error);
+            eprintln!("{message}");
+            std::process::exit(exit_code);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,5 +327,16 @@ mod tests {
         let (msg, code) = render_error(&ErrorData::storage_failure("disk full"));
         assert_eq!(msg, "storage failure: disk full");
         assert_eq!(code, 7);
+    }
+
+    // -- format_success tests --
+
+    #[test]
+    fn test_format_success_pretty_prints_json() {
+        let value = serde_json::json!({"status": "placeholder"});
+        assert_eq!(
+            format_success(&value),
+            "{\n  \"status\": \"placeholder\"\n}"
+        );
     }
 }

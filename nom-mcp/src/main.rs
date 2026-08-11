@@ -1,26 +1,13 @@
 //! nom-mcp — main binary for serving MCP + local CLI.
 //!
 //! Local-CLI path: parses arguments, dispatches to operations, renders errors
-//! through the shared `render_error` function from `nom-core`.
+//! through the shared `cli_exit`/`render_error` functions from `nom-core`.
 
-use nom_core::error::{ErrorData, render_error};
+use nom_core::error::{ErrorData, cli_exit};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-
-    match execute_from_args(&args) {
-        Ok(value) => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
-            );
-        }
-        Err(error) => {
-            let (message, exit_code) = render_error(&error);
-            eprintln!("{message}");
-            std::process::exit(exit_code);
-        }
-    }
+    cli_exit(execute_from_args(&args));
 }
 
 /// Execute an operation from command-line arguments.

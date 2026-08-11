@@ -1,30 +1,16 @@
 //! nom-mcp-remote — thin HTTP client for remote MCP access.
 //!
-//! Deserializes `ErrorData` from HTTP responses and uses the same shared
-//! `render_error` function as the local-CLI so output is identical.
+//! `fetch_from_server` is currently a placeholder stub (see its TODO); once
+//! it makes real HTTP requests it will deserialize `ErrorData` from error
+//! responses and share the same `cli_exit`/`render_error` path as local-CLI
+//! so their output is identical.
 
-use nom_core::error::{ErrorData, render_error};
+use nom_core::error::{ErrorData, cli_exit};
 
 fn main() {
     // TODO: parse server URL from config/env, make HTTP request to remote server.
     // For now, demonstrate the error path with a placeholder.
-
-    // Simulate fetching result from remote server
-    let response = fetch_from_server();
-
-    match response {
-        Ok(value) => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
-            );
-        }
-        Err(error) => {
-            let (message, exit_code) = render_error(&error);
-            eprintln!("{message}");
-            std::process::exit(exit_code);
-        }
-    }
+    cli_exit(fetch_from_server());
 }
 
 /// Fetch data from the remote server.
