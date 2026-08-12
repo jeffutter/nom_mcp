@@ -81,3 +81,9 @@ Pure refactor — zero behavioral change. Reuse existing NutrientValues struct f
 <!-- SECTION:NOTES:BEGIN -->
 Refactored compute_portion_macros and insert_portion to use pub(crate) NutrientValues struct from food module instead of 5 positional f64 parameters. Made NutrientValues fields pub(crate) so meal module can construct and access them. Updated all call sites: resolve_portions, LogMeal Step 4 loop, UpdateMeal portion-replacement loop, build_meal_summary, UpdateMeal adjustment-only recompute, and 3 unit tests. Clippy clean (no too_many_arguments warnings), all 154 tests pass.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Pure refactor — zero behavioral change. Reused existing NutrientValues struct from food module (made pub(crate) with pub(crate) fields) instead of creating a duplicate. Updated compute_portion_macros (8→4 params), insert_portion (11→7 params), all call sites (resolve_portions, LogMeal, UpdateMeal, build_meal_summary), and 3 unit tests. Clippy no longer reports too_many_arguments; all 154 tests pass.
+<!-- SECTION:FINAL_SUMMARY:END -->
