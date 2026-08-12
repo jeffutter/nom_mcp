@@ -1,0 +1,87 @@
+## Implementation Plan
+
+### Module Structure
+Create `nom-core/src/meal/mod.rs` — single file following the food/mod.rs pattern: shared types at top, then one Operation struct per operation, tests at bottom. Register in `lib.rs`.
+
+### Operations (5 total)
+
+#### 1. LogMeal
+- **Request**: `{ portions: [{food_id, quantity, quantity_mode}], adjustment?: {calories?, protein_g?, ...}, logged_at? }`
+- **Validation**: portions array non-empty; each portion has valid food_id (verified via SELECT), quantity > 0, quantity_mode in ('grams', 'servings')
+- **Execution** (all in one transaction):
+  1. If logged_at not provided, use Clock::now() to get current UTC datetime
+  2. Compute logged_date from Clock::logged_date()
+  3. For each portion: look up Food row by food_id, capture snapshot columns (calories_per_100g, protein_g_per_100g, etc., serving_size_g) — error if food not found
+  4. Insert into meals table with materialized totals computed from portions × snapshots + optional adjustments
+  5. Insert each portion with its snapshot values
+  6. Return meal_id and computed totals
+- **Materialized totals formula**: For grams mode: `snapshot_X_per_100g * quantity / 100.0`; For servings mode: `snapshot_X_per_100g * (serving_size_g * quantity) / 100.0` where serving_size_g comes from the snapshot. Sum across all portions, add any adjustment values.
+- **Error handling**: food_id not found → NotFound error; FK violation on insert → StorageFailure
+
+#### 2. UpdateMeal
+- **Request**: `{ meal_id, portions?: [...], adjustment?: {...}, logged_at? }`
+- **Semantics**: portions present = full replacement (delete old, insert new); other fields are independent patches
+- **Execution** (transaction):
+  1. Verify meal exists (SELECT) — error if not found
+  2. If logged_at provided: UPDATE meals SET logged_at=?, logged_date=? WHERE id=?
+  3. If adjustment provided: UPDATE meals SET adjustment_*=? WHERE id=?
+  4. If portions provided: DELETE FROM portions WHERE meal_id=?; then same portion-insert logic as log_meal
+  5. Recompute materialized totals after any change, UPDATE meals
+  6. Return updated meal data
+- **Empty portions array**: Treats as "clear all portions" (full replacement semantics)
+
+#### 3. DeleteMeal
+- **Request**: `{ meal_id }`
+- **Execution**: 
+  1. SELECT meals WHERE id=? — error NotFound if zero rows
+  2. DELETE FROM portions WHERE meal_id=? (cascade delete)
+  3. DELETE FROM meals WHERE id=?
+  4. Return `{ deleted: true, meal_id }`
+- **FK enforcement**: SQLite's ON DELETE CASCADE could handle this, but explicit deletes give us the NotFound check before deletion
+
+#### 4. SearchMeals
+- **Request**: `{ query, date_range?: { start?, end? } }`
+- **Query**: JOIN meals -> portions -> foods; WHERE LOWER(foods.name) LIKE ?; ORDER BY meals.logged_at DESC; optional date range filter on logged_date
+- **Response**: Array of meal summaries with food names included (not just IDs)
+- **No recurring-variation grouping**: Simple keyword match over food names only
+
+#### 5. GetMealsByDateRange (covers today/by_date/by_date_range)
+- **Request**: `{ start_date: YYYY-MM-DD, end_date: YYYY-MM-DD }`
+- **Query**: SELECT meals LEFT JOIN portions WHERE logged_date BETWEEN ? AND ? ORDER BY logged_at DESC
+- **Variants**: get_meals_today uses Clock::today() for both bounds; get_meals_by_date uses single date; get_meals_by_date_range uses explicit range
+- **Implementation**: Single operation that handles all three cases — date_range is always required but callers can pass same date for point queries
+
+### Snapshot Semantics (Portion editing)
+- Portion rows store snapshot_* columns populated at INSERT time from the Foods catalog
+- When update_meal replaces portions, each NEW portion gets a fresh snapshot from the current Foods row
+- Previously logged meals are NEVER retroactively updated when Foods catalog changes
+- No refresh_nutrition_data operation exists
+
+### Transaction Pattern
+Each operation opens its own Connection, runs in an explicit BEGIN/COMMIT transaction. Uses conn.execute_batch() or manual BEGIN/COMMIT for multi-statement operations. Follows food/mod.rs pattern exactly.
+
+### Testing Strategy
+- Unit tests for compute_portion_macros() helper function (grams vs servings modes)
+- Integration tests with TempDb + pre-seeded foods:
+  - test_log_meal_creates_meal_and_portions_with_snapshots
+  - test_log_meal_materializes_totals_correctly
+  - test_log_meal_validates_food_id_not_found
+  - test_update_meal_full_portion_replacement
+  - test_update_meal_partial_patch_adjustment_only
+  - test_delete_meal_cascades_to_portions
+  - test_delete_meal_not_found_error
+  - test_search_meals_matches_food_names
+  - test_get_meals_by_date_range
+- Serial tests using #[serial_test::serial] like food/mod.rs
+
+### File Changes
+- **New**: nom-core/src/meal/mod.rs (~800 lines)
+- **Modified**: nom-core/src/lib.rs — add `pub mod meal;`
+- **Modified**: Main binary/registration code — register meal operations in OperationRegistry
+
+### Edge Cases
+- Empty portions in update_meal → clears all portions (explicit decision)
+- Quantity = 0 in log_meal → Validation error (quantity must be > 0)
+- logged_at in future → accepted (no validation against "today")
+- Adjustment values can be negative (subtraction support)
+- Multiple portions with same food_id → allowed (different quantities)

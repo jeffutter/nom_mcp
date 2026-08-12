@@ -932,11 +932,12 @@ async function doReview(
        \`herdr pane run <new-pane-id> 'claude --permission-mode auto "Run the /review-pi-work skill for the last ${n} tickets"'\`
     3. Wait for that pane's agent to finish with a single blocking call — do NOT poll
        \`herdr pane list\` in a sleep loop, that wastes your own turns waiting on a subagent that
-       hasn't moved. Wait for \`idle\`, not \`done\`: \`claude --permission-mode auto "<prompt>"\`
-       stays resident afterward waiting for more input rather than exiting, and (especially once the
-       pane is focused) it settles at \`idle\` — \`done\` specifically means "finished but nobody's
-       looked yet," which this pane won't satisfy.
-       \`herdr agent wait <new-pane-id> --until idle --timeout ${REVIEW_TIMEOUT_MS}\`
+       hasn't moved. This pane was split with \`--no-focus\` and nothing ever focuses it, so per
+       herdr's own state model it can only ever settle at \`done\` (idle work nobody's looked at
+       yet), never \`idle\` (which additionally requires the tab to have been seen in the focused
+       UI) — waiting on \`--until idle\` alone would block for the full timeout every time even
+       though the agent finished. Accept either:
+       \`herdr agent wait <new-pane-id> --until idle --until done --timeout ${REVIEW_TIMEOUT_MS}\`
        (timeout is in milliseconds — ${REVIEW_TIMEOUT_MIN} minutes). A nonzero exit means it timed out;
        treat that the same as a failed review and continue to steps 4-5 anyway.
     4. Read its final output (\`herdr pane read <new-pane-id> --source recent --lines 400\`) and summarize
