@@ -23,5 +23,6 @@ pub mod config;
 pub mod error;
 pub mod food;
 pub mod logging;
+pub mod meal;
 pub mod operation;
 pub mod storage;

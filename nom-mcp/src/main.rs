@@ -10,6 +10,7 @@ use nom_core::clock::Clock;
 use nom_core::config::{AppConfig, db_path};
 use nom_core::error::{ErrorData, cli_exit};
 use nom_core::food::{CreateCustomFood, SearchFood};
+use nom_core::meal::{DeleteMeal, GetMealsByDateRange, LogMeal, SearchMeals, UpdateMeal};
 use nom_core::operation::OperationRegistry;
 use nom_core::storage::lock_probe;
 
@@ -61,6 +62,13 @@ pub fn execute_from_args(args: &[String]) -> Result<serde_json::Value, ErrorData
     // Register food operations
     registry.register(Arc::new(SearchFood::new(off_client, fdc_client)));
     registry.register(Arc::new(CreateCustomFood::new()));
+
+    // Register meal operations
+    registry.register(Arc::new(LogMeal::new(*clock)));
+    registry.register(Arc::new(UpdateMeal::new(*clock)));
+    registry.register(Arc::new(DeleteMeal::new()));
+    registry.register(Arc::new(SearchMeals::new()));
+    registry.register(Arc::new(GetMealsByDateRange::new()));
 
     // Dispatch based on CLI subcommand
     if args.len() < 2 {
