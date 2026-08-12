@@ -126,4 +126,6 @@ New module: `nom-core/src/food/mod.rs` — contains both operations plus shared 
 
 <!-- SECTION:NOTES:BEGIN -->
 Implemented food/mod.rs with SearchFood (barcode routes to OFF, free-text routes to Custom+USDA merged/capped at 5) and CreateCustomFood operations. All candidates upserted into foods table during search. Nutrients stored per-100g with conversion from per-serving input. No delete_food operation exists (per doc-5 §13). Tests include unit tests for barcode detection, nutrient conversion, OFF macro extraction, merge/dedup logic, plus integration tests with wiremock + temp DB for barcode path, free-text path, custom-only results, USDA merge, upsert idempotency, create_custom_food per-100g conversion, non-gram units, and validation rejections.
+
+Fixup applied post-review: gated SearchFood.db_path field behind #[cfg(test)] (matching CreateCustomFood's existing pattern) to fix a clippy dead_code warning in production builds; removed unused wiremock matcher imports (body_partial_json, query_param); ran cargo fmt on food/mod.rs (repo-wide `cargo fmt --check` was failing, same class of issue as TASK-6).
 <!-- SECTION:NOTES:END -->

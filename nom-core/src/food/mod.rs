@@ -46,10 +46,7 @@ pub struct FoodCandidate {
     #[serde(rename = "fiber_g_per_100g")]
     pub fiber_g_per_100g: f64,
     /// Serving size in grams (nullable).
-    #[serde(
-        rename = "serving_size_g",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "serving_size_g", skip_serializing_if = "Option::is_none")]
     pub serving_size_g: Option<f64>,
 }
 
@@ -110,30 +107,34 @@ async fn upsert_catalog_food(
         RETURNING id
     "#;
 
-    let mut stmt = conn.prepare(sql).await.map_err(|e| {
-        ErrorData::storage_failure(format!("prepare upsert failed: {e}"))
-    })?;
+    let mut stmt = conn
+        .prepare(sql)
+        .await
+        .map_err(|e| ErrorData::storage_failure(format!("prepare upsert failed: {e}")))?;
 
-    let mut rows = stmt.query((
-        source,
-        external_id,
-        name,
-        calories,
-        protein,
-        carbs,
-        fat,
-        fiber,
-        serving_size_g,
-    )).await.map_err(|e| {
-        ErrorData::storage_failure(format!("upsert query failed: {e}"))
-    })?;
+    let mut rows = stmt
+        .query((
+            source,
+            external_id,
+            name,
+            calories,
+            protein,
+            carbs,
+            fat,
+            fiber,
+            serving_size_g,
+        ))
+        .await
+        .map_err(|e| ErrorData::storage_failure(format!("upsert query failed: {e}")))?;
 
-    if let Some(row) = rows.next().await.map_err(|e| {
-        ErrorData::storage_failure(format!("failed to read upsert result: {e}"))
-    })? {
-        let value = row.get_value(0).map_err(|e| {
-            ErrorData::storage_failure(format!("failed to read food_id: {e}"))
-        })?;
+    if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| ErrorData::storage_failure(format!("failed to read upsert result: {e}")))?
+    {
+        let value = row
+            .get_value(0)
+            .map_err(|e| ErrorData::storage_failure(format!("failed to read food_id: {e}")))?;
         match value {
             turso::Value::Integer(id) => Ok(id),
             other => Err(ErrorData::storage_failure(format!(
@@ -169,22 +170,24 @@ async fn insert_custom_food(
         RETURNING id
     "#;
 
-    let mut stmt = conn.prepare(sql).await.map_err(|e| {
-        ErrorData::storage_failure(format!("prepare insert failed: {e}"))
-    })?;
+    let mut stmt = conn
+        .prepare(sql)
+        .await
+        .map_err(|e| ErrorData::storage_failure(format!("prepare insert failed: {e}")))?;
 
-    let mut rows = stmt.query((
-        name, calories, protein, carbs, fat, fiber, serving_size_g,
-    )).await.map_err(|e| {
-        ErrorData::storage_failure(format!("insert query failed: {e}"))
-    })?;
+    let mut rows = stmt
+        .query((name, calories, protein, carbs, fat, fiber, serving_size_g))
+        .await
+        .map_err(|e| ErrorData::storage_failure(format!("insert query failed: {e}")))?;
 
-    if let Some(row) = rows.next().await.map_err(|e| {
-        ErrorData::storage_failure(format!("failed to read insert result: {e}"))
-    })? {
-        let value = row.get_value(0).map_err(|e| {
-            ErrorData::storage_failure(format!("failed to read food_id: {e}"))
-        })?;
+    if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| ErrorData::storage_failure(format!("failed to read insert result: {e}")))?
+    {
+        let value = row
+            .get_value(0)
+            .map_err(|e| ErrorData::storage_failure(format!("failed to read food_id: {e}")))?;
         match value {
             turso::Value::Integer(id) => Ok(id),
             other => Err(ErrorData::storage_failure(format!(
@@ -214,52 +217,59 @@ async fn search_custom_foods(
         LIMIT ?
     "#;
 
-    let mut stmt = conn.prepare(sql).await.map_err(|e| {
-        ErrorData::storage_failure(format!("prepare search failed: {e}"))
-    })?;
+    let mut stmt = conn
+        .prepare(sql)
+        .await
+        .map_err(|e| ErrorData::storage_failure(format!("prepare search failed: {e}")))?;
 
-    let mut rows = stmt.query((&like_pattern[..], limit as i64)).await.map_err(|e| {
-        ErrorData::storage_failure(format!("search query failed: {e}"))
-    })?;
+    let mut rows = stmt
+        .query((&like_pattern[..], limit as i64))
+        .await
+        .map_err(|e| ErrorData::storage_failure(format!("search query failed: {e}")))?;
 
     let mut results = Vec::new();
-    while let Some(row) = rows.next().await.map_err(|e| {
-        ErrorData::storage_failure(format!("failed to read row: {e}"))
-    })? {
-        let id = row.get_value(0).map_err(|e| {
-            ErrorData::storage_failure(format!("failed to read food_id: {e}"))
-        })?;
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| ErrorData::storage_failure(format!("failed to read row: {e}")))?
+    {
+        let id = row
+            .get_value(0)
+            .map_err(|e| ErrorData::storage_failure(format!("failed to read food_id: {e}")))?;
         let id = match id {
             turso::Value::Integer(v) => v,
             _ => return Err(ErrorData::storage_failure("invalid food_id type")),
         };
-        let name = row.get::<String>(1).map_err(|e| {
-            ErrorData::storage_failure(format!("failed to read name: {e}"))
-        })?;
-        let calories = row.get::<f64>(2).map_err(|e| {
-            ErrorData::storage_failure(format!("failed to read calories: {e}"))
-        })?;
-        let protein = row.get::<f64>(3).map_err(|e| {
-            ErrorData::storage_failure(format!("failed to read protein: {e}"))
-        })?;
-        let carbs = row.get::<f64>(4).map_err(|e| {
-            ErrorData::storage_failure(format!("failed to read carbs: {e}"))
-        })?;
-        let fat = row.get::<f64>(5).map_err(|e| {
-            ErrorData::storage_failure(format!("failed to read fat: {e}"))
-        })?;
-        let fiber = row.get::<f64>(6).map_err(|e| {
-            ErrorData::storage_failure(format!("failed to read fiber: {e}"))
-        })?;
-        let serving_size_g = match row.get_value(7).map_err(|e| {
-            ErrorData::storage_failure(format!("failed to read serving_size: {e}"))
-        })? {
+        let name = row
+            .get::<String>(1)
+            .map_err(|e| ErrorData::storage_failure(format!("failed to read name: {e}")))?;
+        let calories = row
+            .get::<f64>(2)
+            .map_err(|e| ErrorData::storage_failure(format!("failed to read calories: {e}")))?;
+        let protein = row
+            .get::<f64>(3)
+            .map_err(|e| ErrorData::storage_failure(format!("failed to read protein: {e}")))?;
+        let carbs = row
+            .get::<f64>(4)
+            .map_err(|e| ErrorData::storage_failure(format!("failed to read carbs: {e}")))?;
+        let fat = row
+            .get::<f64>(5)
+            .map_err(|e| ErrorData::storage_failure(format!("failed to read fat: {e}")))?;
+        let fiber = row
+            .get::<f64>(6)
+            .map_err(|e| ErrorData::storage_failure(format!("failed to read fiber: {e}")))?;
+        let serving_size_g = match row
+            .get_value(7)
+            .map_err(|e| ErrorData::storage_failure(format!("failed to read serving_size: {e}")))?
+        {
             turso::Value::Real(v) => Some(v),
             turso::Value::Null => None,
-            other => return Err(ErrorData::storage_failure(format!(
-                "unexpected value type for serving_size: {:?}",
-                other
-            ))),
+            other => {
+                return Err(ErrorData::storage_failure(format!(
+                    "unexpected value type for serving_size: {:?}",
+                    other
+                )));
+            }
         };
 
         results.push(FoodCandidate {
@@ -281,21 +291,11 @@ async fn search_custom_foods(
 /// Extract macros from an OFF Product, preferring `_100g` fields when available.
 fn extract_off_macros(product: &crate::client::off::Product) -> (f64, f64, f64, f64, f64) {
     let nutriments = product.nutriments.as_ref();
-    let calories = nutriments
-        .and_then(|n| n.energy_kcal_100g)
-        .unwrap_or(0.0);
-    let protein = nutriments
-        .and_then(|n| n.proteins_100g)
-        .unwrap_or(0.0);
-    let carbs = nutriments
-        .and_then(|n| n.carbohydrates_100g)
-        .unwrap_or(0.0);
-    let fat = nutriments
-        .and_then(|n| n.fat_100g)
-        .unwrap_or(0.0);
-    let fiber = nutriments
-        .and_then(|n| n.fiber_100g)
-        .unwrap_or(0.0);
+    let calories = nutriments.and_then(|n| n.energy_kcal_100g).unwrap_or(0.0);
+    let protein = nutriments.and_then(|n| n.proteins_100g).unwrap_or(0.0);
+    let carbs = nutriments.and_then(|n| n.carbohydrates_100g).unwrap_or(0.0);
+    let fat = nutriments.and_then(|n| n.fat_100g).unwrap_or(0.0);
+    let fiber = nutriments.and_then(|n| n.fiber_100g).unwrap_or(0.0);
     (calories, protein, carbs, fat, fiber)
 }
 
@@ -313,9 +313,7 @@ fn merge_candidates(mut candidates: Vec<FoodCandidate>, cap: usize) -> Vec<FoodC
 
     // Deduplicate by name (case-insensitive)
     let mut seen = std::collections::HashSet::new();
-    candidates.retain(|c| {
-        seen.insert(c.name.to_lowercase())
-    });
+    candidates.retain(|c| seen.insert(c.name.to_lowercase()));
 
     // Cap
     candidates.truncate(cap);
@@ -335,6 +333,7 @@ struct SearchFoodRequest {
 pub struct SearchFood {
     off_client: Arc<OffClient>,
     fdc_client: Option<Arc<FdcClient>>,
+    #[cfg(test)]
     db_path: Option<std::path::PathBuf>,
 }
 
@@ -343,6 +342,7 @@ impl SearchFood {
         Self {
             off_client,
             fdc_client,
+            #[cfg(test)]
             db_path: None,
         }
     }
@@ -373,25 +373,24 @@ impl Operation for SearchFood {
         &self,
         args: Arc<serde_json::Value>,
     ) -> Result<serde_json::Value, ErrorData> {
-        let req: SearchFoodRequest = serde_json::from_value((*args).clone()).map_err(|e| {
-            ErrorData::validation("query", format!("invalid request: {e}"))
-        })?;
+        let req: SearchFoodRequest = serde_json::from_value((*args).clone())
+            .map_err(|e| ErrorData::validation("query", format!("invalid request: {e}")))?;
 
         #[cfg(test)]
         let conn = if let Some(ref path) = self.db_path {
-            Connection::open_at(path).await.map_err(|e| {
-                ErrorData::storage_failure(format!("failed to open database: {e}"))
-            })?
+            Connection::open_at(path)
+                .await
+                .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?
         } else {
-            Connection::open().await.map_err(|e| {
-                ErrorData::storage_failure(format!("failed to open database: {e}"))
-            })?
+            Connection::open()
+                .await
+                .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?
         };
 
         #[cfg(not(test))]
-        let conn = Connection::open().await.map_err(|e| {
-            ErrorData::storage_failure(format!("failed to open database: {e}"))
-        })?;
+        let conn = Connection::open()
+            .await
+            .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?;
 
         let candidates = if is_barcode(&req.query) {
             // Barcode path: OpenFoodFacts only
@@ -417,7 +416,10 @@ impl SearchFood {
             ))),
             Ok(None) => Ok(Vec::new()),
             Ok(Some(product)) => {
-                let name = product.product_name.clone().unwrap_or_else(|| query.to_string());
+                let name = product
+                    .product_name
+                    .clone()
+                    .unwrap_or_else(|| query.to_string());
                 let (calories, protein, carbs, fat, fiber) = extract_off_macros(&product);
                 let serving_size_g = product.serving_size;
 
@@ -467,68 +469,63 @@ impl SearchFood {
         // 2. Search USDA FDC (only if client is available)
         if let Some(fdc) = &self.fdc_client {
             match fdc.search_foods(query, 1).await {
-            Ok(search_resp) => {
-                if !search_resp.food_matches.is_empty() {
-                    let ids: Vec<i64> = search_resp
-                        .food_matches
-                        .iter()
-                        .map(|m| m.fdc_id)
-                        .collect();
+                Ok(search_resp) => {
+                    if !search_resp.food_matches.is_empty() {
+                        let ids: Vec<i64> =
+                            search_resp.food_matches.iter().map(|m| m.fdc_id).collect();
 
-                    // Batch-fetch details and upsert each
-                    match fdc.get_foods_batch(&ids).await {
-                        Ok(foods) => {
-                            for food in foods {
-                                let macros = food.extract_macros();
-                                let name = food.description.clone().unwrap_or_default();
-                                if name.is_empty() {
-                                    continue;
+                        // Batch-fetch details and upsert each
+                        match fdc.get_foods_batch(&ids).await {
+                            Ok(foods) => {
+                                for food in foods {
+                                    let macros = food.extract_macros();
+                                    let name = food.description.clone().unwrap_or_default();
+                                    if name.is_empty() {
+                                        continue;
+                                    }
+
+                                    let serving_size_g =
+                                        food.portion_info().first().map(|p| p.gram_weight);
+
+                                    let food_id = upsert_catalog_food(
+                                        conn,
+                                        "USDA_FDC",
+                                        &food.fdc_id.to_string(),
+                                        &name,
+                                        macros.energy_kcal.unwrap_or(0.0),
+                                        macros.protein_g.unwrap_or(0.0),
+                                        macros.carbs_g.unwrap_or(0.0),
+                                        macros.fat_g.unwrap_or(0.0),
+                                        macros.fiber_g.unwrap_or(0.0),
+                                        serving_size_g,
+                                    )
+                                    .await?;
+
+                                    all_candidates.push(FoodCandidate {
+                                        food_id,
+                                        name,
+                                        source: "USDA_FDC".to_string(),
+                                        calories_per_100g: macros.energy_kcal.unwrap_or(0.0),
+                                        protein_g_per_100g: macros.protein_g.unwrap_or(0.0),
+                                        carbs_g_per_100g: macros.carbs_g.unwrap_or(0.0),
+                                        fat_g_per_100g: macros.fat_g.unwrap_or(0.0),
+                                        fiber_g_per_100g: macros.fiber_g.unwrap_or(0.0),
+                                        serving_size_g,
+                                    });
                                 }
-
-                                let serving_size_g = food
-                                    .portion_info()
-                                    .first()
-                                    .map(|p| p.gram_weight);
-
-                                let food_id = upsert_catalog_food(
-                                    conn,
-                                    "USDA_FDC",
-                                    &food.fdc_id.to_string(),
-                                    &name,
-                                    macros.energy_kcal.unwrap_or(0.0),
-                                    macros.protein_g.unwrap_or(0.0),
-                                    macros.carbs_g.unwrap_or(0.0),
-                                    macros.fat_g.unwrap_or(0.0),
-                                    macros.fiber_g.unwrap_or(0.0),
-                                    serving_size_g,
-                                )
-                                .await?;
-
-                                all_candidates.push(FoodCandidate {
-                                    food_id,
-                                    name,
-                                    source: "USDA_FDC".to_string(),
-                                    calories_per_100g: macros.energy_kcal.unwrap_or(0.0),
-                                    protein_g_per_100g: macros.protein_g.unwrap_or(0.0),
-                                    carbs_g_per_100g: macros.carbs_g.unwrap_or(0.0),
-                                    fat_g_per_100g: macros.fat_g.unwrap_or(0.0),
-                                    fiber_g_per_100g: macros.fiber_g.unwrap_or(0.0),
-                                    serving_size_g,
-                                });
                             }
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "USDA FDC batch fetch failed");
-                            // Don't fail the entire search — Custom results still valid
+                            Err(e) => {
+                                tracing::warn!(error = %e, "USDA FDC batch fetch failed");
+                                // Don't fail the entire search — Custom results still valid
+                            }
                         }
                     }
                 }
+                Err(e) => {
+                    tracing::warn!(error = %e, "USDA FDC search failed");
+                    // Don't fail the entire search — Custom results still valid
+                }
             }
-            Err(e) => {
-                tracing::warn!(error = %e, "USDA FDC search failed");
-                // Don't fail the entire search — Custom results still valid
-            }
-        }
         }
         // No USDA FDC client configured — return only Custom results
 
@@ -612,10 +609,8 @@ impl Operation for CreateCustomFood {
         &self,
         args: Arc<serde_json::Value>,
     ) -> Result<serde_json::Value, ErrorData> {
-        let req: CreateCustomFoodRequest =
-            serde_json::from_value((*args).clone()).map_err(|e| {
-                ErrorData::validation("request", format!("invalid request: {e}"))
-            })?;
+        let req: CreateCustomFoodRequest = serde_json::from_value((*args).clone())
+            .map_err(|e| ErrorData::validation("request", format!("invalid request: {e}")))?;
 
         // Validate serving size
         if req.serving_size.quantity <= 0.0 {
@@ -627,19 +622,19 @@ impl Operation for CreateCustomFood {
 
         #[cfg(test)]
         let conn = if let Some(ref path) = self.db_path {
-            Connection::open_at(path).await.map_err(|e| {
-                ErrorData::storage_failure(format!("failed to open database: {e}"))
-            })?
+            Connection::open_at(path)
+                .await
+                .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?
         } else {
-            Connection::open().await.map_err(|e| {
-                ErrorData::storage_failure(format!("failed to open database: {e}"))
-            })?
+            Connection::open()
+                .await
+                .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?
         };
 
         #[cfg(not(test))]
-        let conn = Connection::open().await.map_err(|e| {
-            ErrorData::storage_failure(format!("failed to open database: {e}"))
-        })?;
+        let conn = Connection::open()
+            .await
+            .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?;
 
         // Convert per-serving nutrients to per-100g
         let serving_size_g = req.serving_size.quantity;
@@ -692,7 +687,7 @@ impl Operation for CreateCustomFood {
 mod tests {
     use super::*;
     use crate::storage::test::TempDb;
-    use wiremock::matchers::{body_partial_json, method, path, query_param};
+    use wiremock::matchers::{method, path};
     use wiremock::{Mock, ResponseTemplate};
 
     // -- Helper factories --
@@ -875,24 +870,22 @@ mod tests {
         let base_url = server.uri();
 
         Mock::given(method("GET"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "code": "123456",
-                    "status": 1,
-                    "product": {
-                        "product_name": "Widget",
-                        "serving_size": 50.0,
-                        "nutrition_data_per": "per serving",
-                        "nutriments": {
-                            "energy-kcal_100g": 300.0,
-                            "proteins_100g": 12.0,
-                            "carbohydrates_100g": 25.0,
-                            "fat_100g": 5.0,
-                            "fiber_100g": 3.0
-                        }
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": "123456",
+                "status": 1,
+                "product": {
+                    "product_name": "Widget",
+                    "serving_size": 50.0,
+                    "nutrition_data_per": "per serving",
+                    "nutriments": {
+                        "energy-kcal_100g": 300.0,
+                        "proteins_100g": 12.0,
+                        "carbohydrates_100g": 25.0,
+                        "fat_100g": 5.0,
+                        "fiber_100g": 3.0
                     }
-                })),
-            )
+                }
+            })))
             .expect(1)
             .mount(&server)
             .await;
@@ -925,12 +918,10 @@ mod tests {
         let base_url = server.uri();
 
         Mock::given(method("GET"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "code": "000000000000",
-                    "status": 0
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": "000000000000",
+                "status": 0
+            })))
             .expect(1)
             .mount(&server)
             .await;
@@ -968,12 +959,10 @@ mod tests {
         // USDA search returns empty
         Mock::given(method("POST"))
             .and(path("/v1/foods/search"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "foodMatches": [],
-                    "totalHits": 0
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "foodMatches": [],
+                "totalHits": 0
+            })))
             .expect(1)
             .mount(&server)
             .await;
@@ -1003,14 +992,12 @@ mod tests {
         // USDA search returns matches
         Mock::given(method("POST"))
             .and(path("/v1/foods/search"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "foodMatches": [
-                        {"fdcId": 100000, "description": "Chicken Breast", "dataType": "Foundation"}
-                    ],
-                    "totalHits": 1
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "foodMatches": [
+                    {"fdcId": 100000, "description": "Chicken Breast", "dataType": "Foundation"}
+                ],
+                "totalHits": 1
+            })))
             .expect(1)
             .mount(&server)
             .await;
@@ -1066,16 +1053,14 @@ mod tests {
         let base_url = server.uri();
 
         Mock::given(method("GET"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "code": "123456",
-                    "status": 1,
-                    "product": {
-                        "product_name": "Widget",
-                        "nutriments": {"energy-kcal_100g": 300.0}
-                    }
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": "123456",
+                "status": 1,
+                "product": {
+                    "product_name": "Widget",
+                    "nutriments": {"energy-kcal_100g": 300.0}
+                }
+            })))
             .mount(&server)
             .await;
 
