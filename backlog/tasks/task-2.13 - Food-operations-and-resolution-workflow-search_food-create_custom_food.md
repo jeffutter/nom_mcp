@@ -4,12 +4,15 @@ title: 'Food operations and resolution workflow (search_food, create_custom_food
 status: To Do
 assignee: []
 created_date: '2026-08-11 13:24'
+updated_date: '2026-08-12 01:36'
 labels: []
 dependencies:
   - TASK-2.5
   - TASK-2.7
   - TASK-2.8
   - TASK-2.9
+  - TASK-7
+  - TASK-8
 type: feature
 ordinal: 32000
 ---

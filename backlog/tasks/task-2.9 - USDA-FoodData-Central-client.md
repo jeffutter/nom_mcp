@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@ralph'
 created_date: '2026-08-11 13:23'
-updated_date: '2026-08-12 00:59'
+updated_date: '2026-08-12 01:12'
 labels:
   - planned
 dependencies:
@@ -256,6 +256,14 @@ The client is consumed by food operations (`TASK-2.13`). Operations will:
 4. Call `get_foods_batch()` to hydrate search results with full nutrient data
 5. Extract macros via `extract_macros()` for local caching
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Fixup applied post-review (716bc67, targets 0ff27d7): cargo fmt reformatted usda.rs (13 diffs, CI would have failed); fixed clippy into_iter_on_ref warning in make_search_json test helper; added wiremock query_param/body_partial_json matchers to test_search_foods_success and test_api_key_appears_as_query_param so those tests actually enforce AC#1 (dataType filter) and AC#3 (api_key as query param) instead of only checking HTTP method.
+
+Second fixup applied post-review (37590ce, targets 0ff27d7): extracted duplicated 429/generic-error status-classification logic (repeated verbatim in search_foods, get_food, get_foods_batch) into a private check_status() helper, removing ~40 duplicated lines while preserving get_food's distinct 404 message. Found independently by an automated /code-review pass; all 95 workspace tests, fmt, and clippy still pass.
+<!-- SECTION:NOTES:END -->
 
 ## Final Summary
 
