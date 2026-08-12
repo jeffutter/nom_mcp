@@ -360,6 +360,73 @@ async fn insert_portion(
     Ok(())
 }
 
+/// Macros tuple returned by [compute_portion_macros].
+type MacroTuple = (f64, f64, f64, f64, f64);
+
+/// Snapshot tuple: (food_id, quantity_mode, quantity, snap_cal, snap_prot, snap_carb, snap_fat, snap_fiber, snap_serving_size_g).
+type SnapshotTuple = (i64, String, f64, f64, f64, f64, f64, f64, Option<f64>);
+
+/// Resolve a list of portion inputs into computed macros and snapshots.
+///
+/// Validates each portion's `quantity_mode` and `quantity`, looks up the food
+/// from the catalog, computes macros, and accumulates results.
+/// Returns owned `String` for `quantity_mode` in snapshots so ownership flows
+/// cleanly out of this async function.
+async fn resolve_portions(
+    conn: &Connection,
+    portions: &[PortionInput],
+) -> Result<(Vec<MacroTuple>, Vec<SnapshotTuple>), ErrorData> {
+    let mut all_macros: Vec<MacroTuple> = Vec::new();
+    let mut snapshots: Vec<SnapshotTuple> = Vec::new();
+
+    for portion in portions {
+        if portion.quantity_mode != "grams" && portion.quantity_mode != "servings" {
+            return Err(ErrorData::validation(
+                "quantity_mode",
+                format!(
+                    "must be 'grams' or 'servings' (got '{}')",
+                    portion.quantity_mode
+                ),
+            ));
+        }
+        if portion.quantity <= 0.0 {
+            return Err(ErrorData::validation(
+                "quantity",
+                "must be greater than zero",
+            ));
+        }
+
+        let (_name, snap_cal, snap_prot, snap_carb, snap_fat, snap_fiber, snap_serving) =
+            lookup_food(conn, portion.food_id).await?;
+
+        let macros = compute_portion_macros(
+            portion.quantity,
+            &portion.quantity_mode,
+            snap_serving,
+            snap_cal,
+            snap_prot,
+            snap_carb,
+            snap_fat,
+            snap_fiber,
+        );
+        all_macros.push(macros);
+
+        snapshots.push((
+            portion.food_id,
+            portion.quantity_mode.clone(),
+            portion.quantity,
+            snap_cal,
+            snap_prot,
+            snap_carb,
+            snap_fat,
+            snap_fiber,
+            snap_serving,
+        ));
+    }
+
+    Ok((all_macros, snapshots))
+}
+
 /// Build a MealSummary from a meal row and its portions.
 async fn build_meal_summary(conn: &Connection, meal_id: i64) -> Result<MealSummary, ErrorData> {
     // Fetch meal row
@@ -654,55 +721,8 @@ impl Operation for LogMeal {
             .map_err(|e| ErrorData::storage_failure(format!("transaction begin failed: {e}")))?;
 
         let result = (async {
-            // Step 1: Validate all inputs and look up foods
-            let mut all_macros: Vec<(f64, f64, f64, f64, f64)> = Vec::new();
-            let mut snapshots: Vec<(i64, &str, f64, f64, f64, f64, f64, f64, Option<f64>)> =
-                Vec::new();
-
-            for portion in &req.portions {
-                if portion.quantity_mode != "grams" && portion.quantity_mode != "servings" {
-                    return Err(ErrorData::validation(
-                        "quantity_mode",
-                        format!(
-                            "must be 'grams' or 'servings' (got '{}')",
-                            portion.quantity_mode
-                        ),
-                    ));
-                }
-                if portion.quantity <= 0.0 {
-                    return Err(ErrorData::validation(
-                        "quantity",
-                        "must be greater than zero",
-                    ));
-                }
-
-                let (_name, snap_cal, snap_prot, snap_carb, snap_fat, snap_fiber, snap_serving) =
-                    lookup_food(&conn, portion.food_id).await?;
-
-                let macros = compute_portion_macros(
-                    portion.quantity,
-                    &portion.quantity_mode,
-                    snap_serving,
-                    snap_cal,
-                    snap_prot,
-                    snap_carb,
-                    snap_fat,
-                    snap_fiber,
-                );
-                all_macros.push(macros);
-
-                snapshots.push((
-                    portion.food_id,
-                    &portion.quantity_mode,
-                    portion.quantity,
-                    snap_cal,
-                    snap_prot,
-                    snap_carb,
-                    snap_fat,
-                    snap_fiber,
-                    snap_serving,
-                ));
-            }
+            // Step 1: Validate portions, look up foods, compute macros + snapshots
+            let (all_macros, snapshots) = resolve_portions(&conn, &req.portions).await?;
 
             // Step 2: Compute totals
             let totals = compute_totals(&all_macros, req.adjustment.as_ref());
@@ -720,7 +740,17 @@ impl Operation for LogMeal {
             // Step 4: Insert portions with correct meal_id
             for (food_id, qty_mode, qty, sc, sp, scc, sf, sfi, ss) in &snapshots {
                 insert_portion(
-                    &conn, meal_id, *food_id, qty_mode, *qty, *sc, *sp, *scc, *sf, *sfi, *ss,
+                    &conn,
+                    meal_id,
+                    *food_id,
+                    qty_mode.as_str(),
+                    *qty,
+                    *sc,
+                    *sp,
+                    *scc,
+                    *sf,
+                    *sfi,
+                    *ss,
                 )
                 .await?;
             }
@@ -857,10 +887,7 @@ impl Operation for UpdateMeal {
             // Update logged_at if provided
             if let Some(ref ts) = req.logged_at {
                 let dt: DateTime<Utc> = ts.parse().map_err(|_| {
-                    ErrorData::validation(
-                        "logged_at",
-                        format!("invalid datetime format: {}", ts),
-                    )
+                    ErrorData::validation("logged_at", format!("invalid datetime format: {}", ts))
                 })?;
                 let logged_at_str = format!("{}", dt.format("%Y-%m-%dT%H:%M:%SZ"));
                 let logged_date_str = Clock::format_date(self.clock.logged_date(&dt));
@@ -892,75 +919,74 @@ impl Operation for UpdateMeal {
             // Replace portions if provided (full replacement semantics)
             if let Some(new_portions) = &req.portions {
                 // Delete old portions
-                conn.execute(
-                    "DELETE FROM portions WHERE meal_id = ?",
-                    (req.meal_id,),
-                )
-                .await
-                .map_err(|e| ErrorData::storage_failure(format!("delete portions failed: {e}")))?;
+                conn.execute("DELETE FROM portions WHERE meal_id = ?", (req.meal_id,))
+                    .await
+                    .map_err(|e| {
+                        ErrorData::storage_failure(format!("delete portions failed: {e}"))
+                    })?;
 
-                let mut all_macros: Vec<(f64, f64, f64, f64, f64)> = Vec::new();
-                let mut snapshots: Vec<(i64, &str, f64, f64, f64, f64, f64, f64, Option<f64>)> = Vec::new();
+                // Validate, look up foods, compute macros + snapshots
+                let (all_macros, snapshots) = resolve_portions(&conn, new_portions).await?;
 
-                if !new_portions.is_empty() {
-                    for portion in new_portions {
-                        if portion.quantity_mode != "grams" && portion.quantity_mode != "servings" {
-                            return Err(ErrorData::validation(
-                                "quantity_mode",
-                                format!("must be 'grams' or 'servings' (got '{}')", portion.quantity_mode),
-                            ));
-                        }
-                        if portion.quantity <= 0.0 {
-                            return Err(ErrorData::validation(
-                                "quantity",
-                                "must be greater than zero",
-                            ));
-                        }
-
-                        let (_name, snap_cal, snap_prot, snap_carb, snap_fat, snap_fiber, snap_serving) =
-                            lookup_food(&conn, portion.food_id).await?;
-
-                        let macros = compute_portion_macros(
-                            portion.quantity,
-                            &portion.quantity_mode,
-                            snap_serving,
-                            snap_cal, snap_prot, snap_carb, snap_fat, snap_fiber,
-                        );
-                        all_macros.push(macros);
-                        snapshots.push((
-                            portion.food_id,
-                            &portion.quantity_mode,
-                            portion.quantity,
-                            snap_cal, snap_prot, snap_carb, snap_fat, snap_fiber, snap_serving,
-                        ));
-                    }
-
-                    for (food_id, qty_mode, qty, sc, sp, scc, sf, sfi, ss) in &snapshots {
-                        insert_portion(
-                            &conn, req.meal_id, *food_id, qty_mode, *qty,
-                            *sc, *sp, *scc, *sf, *sfi, *ss,
-                        ).await?;
-                    }
+                for (food_id, qty_mode, qty, sc, sp, scc, sf, sfi, ss) in &snapshots {
+                    insert_portion(
+                        &conn,
+                        req.meal_id,
+                        *food_id,
+                        qty_mode.as_str(),
+                        *qty,
+                        *sc,
+                        *sp,
+                        *scc,
+                        *sf,
+                        *sfi,
+                        *ss,
+                    )
+                    .await?;
                 }
 
                 // Recompute totals
                 let adj_result: Option<Adjustment> = {
-                    let mut stmt = conn.prepare(
-                        "SELECT adjustment_calories, adjustment_protein_g, adjustment_carbs_g, \
+                    let mut stmt = conn
+                        .prepare(
+                            "SELECT adjustment_calories, adjustment_protein_g, adjustment_carbs_g, \
                          adjustment_fat_g, adjustment_fiber_g FROM meals WHERE id = ?",
-                    ).await.map_err(|e| ErrorData::storage_failure(format!("prepare failed: {e}")))?;
-                    let mut rows = stmt.query((req.meal_id,)).await
+                        )
+                        .await
+                        .map_err(|e| ErrorData::storage_failure(format!("prepare failed: {e}")))?;
+                    let mut rows = stmt
+                        .query((req.meal_id,))
+                        .await
                         .map_err(|e| ErrorData::storage_failure(format!("query failed: {e}")))?;
-                    if let Some(row) = rows.next().await
+                    if let Some(row) = rows
+                        .next()
+                        .await
                         .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
                     {
-                        let c: Option<f64> = row.get(0).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-                        let p: Option<f64> = row.get(1).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-                        let cb: Option<f64> = row.get(2).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-                        let f: Option<f64> = row.get(3).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-                        let fi: Option<f64> = row.get(4).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-                        if c.is_some() || p.is_some() || cb.is_some() || f.is_some() || fi.is_some() {
-                            Some(Adjustment { calories: c, protein_g: p, carbs_g: cb, fat_g: f, fiber_g: fi })
+                        let c: Option<f64> = row
+                            .get(0)
+                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+                        let p: Option<f64> = row
+                            .get(1)
+                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+                        let cb: Option<f64> = row
+                            .get(2)
+                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+                        let f: Option<f64> = row
+                            .get(3)
+                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+                        let fi: Option<f64> = row
+                            .get(4)
+                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+                        if c.is_some() || p.is_some() || cb.is_some() || f.is_some() || fi.is_some()
+                        {
+                            Some(Adjustment {
+                                calories: c,
+                                protein_g: p,
+                                carbs_g: cb,
+                                fat_g: f,
+                                fiber_g: fi,
+                            })
                         } else {
                             None
                         }
@@ -974,8 +1000,14 @@ impl Operation for UpdateMeal {
                     "UPDATE meals SET total_calories = ?, total_protein_g = ?, \
                      total_carbs_g = ?, total_fat_g = ?, total_fiber_g = ? \
                      WHERE id = ?",
-                    (totals.total_calories, totals.total_protein_g, totals.total_carbs_g,
-                     totals.total_fat_g, totals.total_fiber_g, req.meal_id),
+                    (
+                        totals.total_calories,
+                        totals.total_protein_g,
+                        totals.total_carbs_g,
+                        totals.total_fat_g,
+                        totals.total_fiber_g,
+                        req.meal_id,
+                    ),
                 )
                 .await
                 .map_err(|e| ErrorData::storage_failure(format!("update totals failed: {e}")))?;
@@ -990,27 +1022,51 @@ impl Operation for UpdateMeal {
                                p.snapshot_fiber_g_per_100g, p.snapshot_serving_size_g
                         FROM portions p WHERE p.meal_id = ?
                     "#;
-                    let mut stmt = conn.prepare(sql).await
+                    let mut stmt = conn
+                        .prepare(sql)
+                        .await
                         .map_err(|e| ErrorData::storage_failure(format!("prepare failed: {e}")))?;
-                    let mut rows = stmt.query((req.meal_id,)).await
+                    let mut rows = stmt
+                        .query((req.meal_id,))
+                        .await
                         .map_err(|e| ErrorData::storage_failure(format!("query failed: {e}")))?;
-                    while let Some(row) = rows.next().await
+                    while let Some(row) = rows
+                        .next()
+                        .await
                         .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
                     {
-                        let qty_mode: String = row.get(0).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-                        let quantity: f64 = row.get(1).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-                        let sc: f64 = row.get(2).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-                        let sp: f64 = row.get(3).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-                        let scc: f64 = row.get(4).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-                        let sf: f64 = row.get(5).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-                        let sfi: f64 = row.get(6).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-                        let ss: Option<f64> = match row.get_value(7)
-                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))? {
+                        let qty_mode: String = row
+                            .get(0)
+                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+                        let quantity: f64 = row
+                            .get(1)
+                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+                        let sc: f64 = row
+                            .get(2)
+                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+                        let sp: f64 = row
+                            .get(3)
+                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+                        let scc: f64 = row
+                            .get(4)
+                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+                        let sf: f64 = row
+                            .get(5)
+                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+                        let sfi: f64 = row
+                            .get(6)
+                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+                        let ss: Option<f64> = match row
+                            .get_value(7)
+                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
+                        {
                             turso::Value::Real(v) => Some(v),
                             turso::Value::Null => None,
                             _ => None,
                         };
-                        all_macros.push(compute_portion_macros(quantity, &qty_mode, ss, sc, sp, scc, sf, sfi));
+                        all_macros.push(compute_portion_macros(
+                            quantity, &qty_mode, ss, sc, sp, scc, sf, sfi,
+                        ));
                     }
                 }
 
@@ -1019,8 +1075,14 @@ impl Operation for UpdateMeal {
                     "UPDATE meals SET total_calories = ?, total_protein_g = ?, \
                      total_carbs_g = ?, total_fat_g = ?, total_fiber_g = ? \
                      WHERE id = ?",
-                    (totals.total_calories, totals.total_protein_g, totals.total_carbs_g,
-                     totals.total_fat_g, totals.total_fiber_g, req.meal_id),
+                    (
+                        totals.total_calories,
+                        totals.total_protein_g,
+                        totals.total_carbs_g,
+                        totals.total_fat_g,
+                        totals.total_fiber_g,
+                        req.meal_id,
+                    ),
                 )
                 .await
                 .map_err(|e| ErrorData::storage_failure(format!("update totals failed: {e}")))?;
@@ -1255,11 +1317,13 @@ impl Operation for SearchMeals {
             .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?;
 
         let like_pattern = format!("%{}%", req.query.to_lowercase());
-        let mut sql_parts = vec!["SELECT DISTINCT m.id FROM meals m \
+        let mut sql_parts = vec![
+            "SELECT DISTINCT m.id FROM meals m \
              JOIN portions p ON p.meal_id = m.id \
              JOIN foods f ON p.food_id = f.id \
              WHERE LOWER(f.name) LIKE ?"
-            .to_string()];
+                .to_string(),
+        ];
         let mut params: Vec<String> = vec![like_pattern];
 
         if let Some(ref range) = req.date_range {
@@ -1874,10 +1938,12 @@ mod tests {
 
         let arr = result.as_array().unwrap();
         assert_eq!(arr.len(), 1);
-        assert!(arr[0]["portions"][0]["food_name"]
-            .as_str()
-            .unwrap()
-            .contains("Chicken"));
+        assert!(
+            arr[0]["portions"][0]["food_name"]
+                .as_str()
+                .unwrap()
+                .contains("Chicken")
+        );
     }
 
     #[serial_test::serial]
