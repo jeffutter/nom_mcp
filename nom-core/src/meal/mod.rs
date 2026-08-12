@@ -2037,6 +2037,100 @@ mod tests {
         );
     }
 
+    /// Regression test: untouched meal snapshots stay frozen when Foods catalog changes.
+    /// Proves that previously logged meals are NEVER retroactively updated when
+    /// the foods table is mutated, even without calling update_meal.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_snapshot_semantics_untouched_meal_unaffected_by_catalog_change() {
+        // SETUP — seed a food with known macros
+        let db = TempDb::new().await;
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        let food_id = seed_food(&conn, "Almonds").await.unwrap();
+        drop(conn);
+
+        // LOG MEAL — log a meal with 100g of Almonds
+        // seed_food sets calories_per_100g=250.0, protein=20.0, carbs=30.0, fat=8.0, fiber=3.0
+        // So 100g gives: calories=250.0, protein=20.0, carbs=30.0, fat=8.0, fiber=3.0
+        let clock = Clock { tz: chrono_tz::UTC };
+        let log_op = LogMeal::new(clock).with_db_path(db.path.clone());
+        let log_result = log_op
+            .execute_json(Arc::new(serde_json::json!({
+                "portions": [{"food_id": food_id, "quantity": 100.0, "quantity_mode": "grams"}]
+            })))
+            .await
+            .unwrap();
+
+        // CAPTURE ORIGINAL TOTALS from log result
+        let original_calories = log_result["totals"]["total_calories"].as_f64().unwrap();
+        let original_protein = log_result["totals"]["total_protein_g"].as_f64().unwrap();
+        let original_carbs = log_result["totals"]["total_carbs_g"].as_f64().unwrap();
+        let original_fat = log_result["totals"]["total_fat_g"].as_f64().unwrap();
+        let original_fiber = log_result["totals"]["total_fiber_g"].as_f64().unwrap();
+
+        // Expected values: 250.0 cal, 20.0 protein, 30.0 carbs, 8.0 fat, 3.0 fiber
+        assert!((original_calories - 250.0).abs() < 0.01);
+        assert!((original_protein - 20.0).abs() < 0.01);
+        assert!((original_carbs - 30.0).abs() < 0.01);
+        assert!((original_fat - 8.0).abs() < 0.01);
+        assert!((original_fiber - 3.0).abs() < 0.01);
+
+        // MUTATE CATALOG — directly UPDATE the foods table to wildly different values
+        // Do NOT call update_meal or any meal operation
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        conn.execute(
+            "UPDATE foods SET calories_per_100g = 999.0, protein_g_per_100g = 99.0, \
+             carbs_g_per_100g = 99.0, fat_g_per_100g = 99.0, fiber_g_per_100g = 99.0 \
+             WHERE id = ?",
+            (food_id,),
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        // RE-FETCH — use GetMealsByDateRange which exercises build_meal_summary internally
+        let op = GetMealsByDateRange::new().with_db_path(db.path.clone());
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "start_date": today,
+                "end_date": today
+            })))
+            .await
+            .unwrap();
+
+        let arr = result.as_array().unwrap();
+        assert!(!arr.is_empty(), "Should have at least one meal for today");
+
+        // ASSERT — totals must be UNCHANGED from original (frozen snapshot)
+        let returned_calories = arr[0]["totals"]["total_calories"].as_f64().unwrap();
+        let returned_protein = arr[0]["totals"]["total_protein_g"].as_f64().unwrap();
+        let returned_carbs = arr[0]["totals"]["total_carbs_g"].as_f64().unwrap();
+        let returned_fat = arr[0]["totals"]["total_fat_g"].as_f64().unwrap();
+        let returned_fiber = arr[0]["totals"]["total_fiber_g"].as_f64().unwrap();
+
+        assert!(
+            (returned_calories - original_calories).abs() < 0.01,
+            "Untouched meal calories should stay frozen ({original_calories}) despite catalog change to 999.0, got {returned_calories}"
+        );
+        assert!(
+            (returned_protein - original_protein).abs() < 0.01,
+            "Untouched meal protein should stay frozen ({original_protein}) despite catalog change"
+        );
+        assert!(
+            (returned_carbs - original_carbs).abs() < 0.01,
+            "Untouched meal carbs should stay frozen ({original_carbs}) despite catalog change"
+        );
+        assert!(
+            (returned_fat - original_fat).abs() < 0.01,
+            "Untouched meal fat should stay frozen ({original_fat}) despite catalog change"
+        );
+        assert!(
+            (returned_fiber - original_fiber).abs() < 0.01,
+            "Untouched meal fiber should stay frozen ({original_fiber}) despite catalog change"
+        );
+    }
+
     #[serial_test::serial]
     #[tokio::test]
     async fn test_log_meal_servings_mode() {
