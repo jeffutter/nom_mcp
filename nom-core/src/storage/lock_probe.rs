@@ -43,40 +43,23 @@ mod tests {
     use tempfile::TempDir;
 
     /// Resolve the path to the `lock_holder` binary built by cargo.
+    ///
+    /// `cargo test` builds every `[[bin]]` target before running tests, so the
+    /// binary already exists by the time this runs — no need to shell out to
+    /// `cargo build` ourselves. The test binary lives at
+    /// `target/<profile>/deps/<name>-<hash>`; `lock_holder` is a sibling one
+    /// level up, at `target/<profile>/lock_holder`.
     fn find_lock_holder() -> std::path::PathBuf {
-        // Build the binary first (may already exist from previous runs)
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-            .unwrap_or_else(|_| panic!("CARGO_MANIFEST_DIR not set — run through cargo test"));
-        let status = std::process::Command::new("cargo")
-            .args(["build", "--bin", "lock_holder"])
-            .current_dir(&manifest_dir)
-            .status()
-            .expect("failed to run cargo build");
-        if !status.success() {
-            panic!("cargo build --bin lock_holder failed");
+        let test_exe = std::env::current_exe().expect("current_exe should resolve");
+        let profile_dir = test_exe
+            .parent() // .../target/<profile>/deps
+            .and_then(|p| p.parent()) // .../target/<profile>
+            .unwrap_or_else(|| panic!("could not determine profile dir from {:?}", test_exe));
+        let bin_path = profile_dir.join("lock_holder");
+        if !bin_path.exists() {
+            panic!("could not find lock_holder binary at {:?}", bin_path);
         }
-
-        // Determine the target directory — for workspaces this is the workspace root
-        let target_dir = std::env::var("CARGO_TARGET_DIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| {
-                // Walk up from manifest_dir to find where the binary actually lives
-                let mut dir = std::path::PathBuf::from(&manifest_dir);
-                while let Some(parent) = dir.parent() {
-                    let candidate = parent.join("target");
-                    if candidate.join("debug").join("lock_holder").exists() {
-                        return candidate;
-                    }
-                    dir = parent.to_path_buf();
-                }
-                // Default fallback
-                std::path::PathBuf::from(&manifest_dir).join("target")
-            });
-        let bin_path = target_dir.join("debug").join("lock_holder");
-        if bin_path.exists() {
-            return bin_path;
-        }
-        panic!("could not find lock_holder binary at {:?}", bin_path);
+        bin_path
     }
 
     #[test]

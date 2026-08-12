@@ -82,6 +82,8 @@ Also run full suite: \`nix develop -c cargo test -p nom-core\`
 Replaced broken rustc compile-from-string approach with dedicated lock_holder binary target. The old test compiled ad-hoc Rust source without libc linking (always failed silently). New approach: spawned lock_holder binary (properly linked by Cargo) holds an exclusive write lock via fcntl/F_SETLKW; parent verifies probe_db_lock detects it (is_locked=true), kills child, then verifies lock release (is_locked=false). All 132 tests pass.
 
 Fixup applied post-review: lock_probe.rs and lock_holder.rs failed cargo fmt --all --check as committed, which would fail the project's CI fmt gate. Ran rustfmt on both files (formatting only, no logic change).
+
+Fixup applied post-review (round 2): find_lock_holder() shelled out to `cargo build --bin lock_holder` as a subprocess on every test run and manually walked directories to find the target dir — reproducibly triggering full dependency recompilation and build-lock contention with the outer `cargo test` process (see TASK-18, filed against this same function). Replaced with `std::env::current_exe()`-based sibling-path resolution: the test binary and `lock_holder` both live under `target/<profile>/`, so no subprocess or directory walk is needed. No behavior change; `test_probe_locked_file` still passes, confirmed across 3 consecutive runs with zero recompilation. TASK-18's AC #1 is now satisfied by this fix; its AC #2 (racy sleep-based sync) and AC #3 (no Drop-guard on the child process) remain open.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
