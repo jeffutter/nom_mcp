@@ -64,10 +64,7 @@ pub fn execute_from_args(args: &[String]) -> Result<serde_json::Value, ErrorData
 
     // Dispatch based on CLI subcommand
     if args.len() < 2 {
-        return Err(ErrorData::validation(
-            "command",
-            "no subcommand provided",
-        ));
+        return Err(ErrorData::validation("command", "no subcommand provided"));
     }
 
     let op_name = &args[1];

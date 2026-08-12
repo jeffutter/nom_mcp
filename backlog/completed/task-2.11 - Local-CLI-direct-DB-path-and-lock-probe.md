@@ -139,6 +139,8 @@ Implementation:
 - Wired lock probe into execute_from_args() in nom-mcp/src/main.rs
 - Added 3 unit tests: unlocked file, locked file (via child process), missing file
 - All 112 tests pass including 3 new lock_probe tests
+
+Fixup applied post-review: ran cargo fmt on storage/connection.rs, storage/lock_probe.rs, and nom-mcp/src/main.rs (repo-wide `cargo fmt --check` was failing, same class of issue as TASK-6).
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

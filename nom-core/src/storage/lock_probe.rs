@@ -110,7 +110,10 @@ mod tests {
 
         if !rustc.status.success() {
             // If rustc isn't available or fails, skip this test gracefully
-            eprintln!("skipping locked-file test (rustc unavailable): {}", String::from_utf8_lossy(&rustc.stderr));
+            eprintln!(
+                "skipping locked-file test (rustc unavailable): {}",
+                String::from_utf8_lossy(&rustc.stderr)
+            );
             return;
         }
 

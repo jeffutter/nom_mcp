@@ -32,9 +32,9 @@ impl Connection {
     /// Tests should use [`Connection::open_at`] directly to bypass the probe.
     pub async fn open_safe(path: &Path) -> Result<Self, StorageError> {
         // Probe the lock BEFORE constructing a Turso database
-        if super::lock_probe::probe_db_lock(path).map_err(|e| {
-            StorageError::Io(format!("failed to probe database lock: {e}"))
-        })? {
+        if super::lock_probe::probe_db_lock(path)
+            .map_err(|e| StorageError::Io(format!("failed to probe database lock: {e}")))?
+        {
             return Err(StorageError::Database(
                 "database file is locked by another process".to_string(),
             ));
