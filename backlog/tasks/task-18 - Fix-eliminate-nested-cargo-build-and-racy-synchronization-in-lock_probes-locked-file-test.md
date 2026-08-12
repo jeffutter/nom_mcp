@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-08-12 20:22'
+updated_date: '2026-08-12 21:36'
 labels:
   - review-followup
 dependencies:
@@ -22,7 +23,7 @@ Found while reviewing TASK-10 (nom-core/src/storage/lock_probe.rs). TASK-10 repl
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 test_probe_locked_file no longer invokes 'cargo build' (or any Command::new("cargo")) at test-run time; the lock_holder binary is located via a mechanism that does not trigger recompilation on a cached build (e.g. std::env::var("CARGO_BIN_EXE_lock_holder") if the test is moved under nom-core/tests/ as an integration test, since CARGO_BIN_EXE_<name> is only populated for integration tests -- or another approach that avoids invoking cargo build from within the test process; document whichever approach is chosen and why)
+- [x] #1 test_probe_locked_file no longer invokes 'cargo build' (or any Command::new("cargo")) at test-run time; the lock_holder binary is located via a mechanism that does not trigger recompilation on a cached build (e.g. std::env::var("CARGO_BIN_EXE_lock_holder") if the test is moved under nom-core/tests/ as an integration test, since CARGO_BIN_EXE_<name> is only populated for integration tests -- or another approach that avoids invoking cargo build from within the test process; document whichever approach is chosen and why)
 - [ ] #2 The parent test no longer relies on a fixed sleep to infer the child has acquired the lock -- it waits on an explicit signal from the child (e.g. the child writes a byte to its stdout, or to a dedicated pipe/fd, immediately after a successful F_SETLKW, and the parent blocks reading that signal with a bounded timeout before calling probe_db_lock)
 - [ ] #3 The spawned child process is guaranteed to be killed even if an assertion panics between spawn and kill (e.g. via a scope guard / Drop-based wrapper type that kills the child in its Drop impl, or an explicit catch_unwind around the assertions with a kill-then-resume-unwind pattern)
 - [ ] #4 nix develop -c cargo test -p nom-core -- --nocapture storage::lock_probe run 3 times consecutively all show the locked-file assertion executing (not a 'skipping' message) and none of the 3 runs recompile any dependency crate (verify by checking for 'Compiling' lines in the test output on the 2nd and 3rd runs -- there should be none)
@@ -42,3 +43,9 @@ SETUP (read first): This is a Rust+WebAssembly core (nom-core, nom-mcp). ALL com
 6. Update nom-core/Cargo.toml's [[bin]] section if its path needs adjusting for the new test location (it likely doesn't, since [[bin]] targets are independent of where tests reference them).
 7. Run: nix develop -c cargo test -p nom-core -- --nocapture storage::lock_probe (or the new integration test's path) three times in a row and confirm no 'Compiling' output appears on runs 2 and 3, and the locked-file assertions visibly execute each time. Then run the full suite: nix develop -c cargo test -p nom-core, and nix develop -c cargo fmt --check -p nom-core on the touched files.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+AC #1 satisfied as part of a review-round fixup to TASK-10's commit (unpushed, folded via git commit --fixup): find_lock_holder() no longer shells out to 'cargo build' or walks directories manually. Replaced with std::env::current_exe() sibling-path resolution (test binary and lock_holder binary are both under target/<profile>/, one level below/above 'deps'), since CARGO_BIN_EXE_lock_holder is unavailable here (unit test module, not an integration test under tests/ -- moving the test wasn't done, so that path wasn't taken). Verified via three consecutive 'nix develop -c cargo test -p nom-core -- --nocapture storage::lock_probe' runs: no 'Compiling' output on runs 2/3, locked-file assertions execute every run. AC #2 (racy fixed-sleep synchronization) and AC #3 (no Drop-guard/panic safety for the spawned child) are UNCHANGED and still need implementing.
+<!-- SECTION:NOTES:END -->
