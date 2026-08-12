@@ -55,12 +55,12 @@ pub struct FoodCandidate {
 /// Used as a single parameter for DB helper functions to avoid
 /// `too_many_arguments` clippy warnings and transposition hazards.
 #[derive(Debug, Clone, Copy)]
-struct NutrientValues {
-    calories: f64,
-    protein_g: f64,
-    carbs_g: f64,
-    fat_g: f64,
-    fiber_g: f64,
+pub(crate) struct NutrientValues {
+    pub(crate) calories: f64,
+    pub(crate) protein_g: f64,
+    pub(crate) carbs_g: f64,
+    pub(crate) fat_g: f64,
+    pub(crate) fiber_g: f64,
 }
 
 /// Convert per-serving nutrients to per-100g values.

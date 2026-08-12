@@ -16,6 +16,7 @@ use serde::Deserialize;
 
 use crate::clock::Clock;
 use crate::error::ErrorData;
+use crate::food::NutrientValues;
 use crate::operation::Operation;
 use crate::storage::Connection;
 
@@ -129,11 +130,7 @@ fn compute_portion_macros(
     quantity: f64,
     quantity_mode: &str,
     snapshot_serving_size_g: Option<f64>,
-    snapshot_calories_per_100g: f64,
-    snapshot_protein_g_per_100g: f64,
-    snapshot_carbs_g_per_100g: f64,
-    snapshot_fat_g_per_100g: f64,
-    snapshot_fiber_g_per_100g: f64,
+    snapshot_nutrients: NutrientValues,
 ) -> (f64, f64, f64, f64, f64) {
     let effective_grams = if quantity_mode == "servings" {
         match snapshot_serving_size_g {
@@ -146,11 +143,11 @@ fn compute_portion_macros(
 
     let factor = effective_grams / 100.0;
     (
-        snapshot_calories_per_100g * factor,
-        snapshot_protein_g_per_100g * factor,
-        snapshot_carbs_g_per_100g * factor,
-        snapshot_fat_g_per_100g * factor,
-        snapshot_fiber_g_per_100g * factor,
+        snapshot_nutrients.calories * factor,
+        snapshot_nutrients.protein_g * factor,
+        snapshot_nutrients.carbs_g * factor,
+        snapshot_nutrients.fat_g * factor,
+        snapshot_nutrients.fiber_g * factor,
     )
 }
 
@@ -326,11 +323,7 @@ async fn insert_portion(
     food_id: i64,
     quantity_mode: &str,
     quantity: f64,
-    snapshot_calories_per_100g: f64,
-    snapshot_protein_g_per_100g: f64,
-    snapshot_carbs_g_per_100g: f64,
-    snapshot_fat_g_per_100g: f64,
-    snapshot_fiber_g_per_100g: f64,
+    snapshot_nutrients: NutrientValues,
     snapshot_serving_size_g: Option<f64>,
 ) -> Result<(), ErrorData> {
     let sql = r#"
@@ -347,11 +340,11 @@ async fn insert_portion(
             food_id,
             quantity_mode,
             quantity,
-            snapshot_calories_per_100g,
-            snapshot_protein_g_per_100g,
-            snapshot_carbs_g_per_100g,
-            snapshot_fat_g_per_100g,
-            snapshot_fiber_g_per_100g,
+            snapshot_nutrients.calories,
+            snapshot_nutrients.protein_g,
+            snapshot_nutrients.carbs_g,
+            snapshot_nutrients.fat_g,
+            snapshot_nutrients.fiber_g,
             snapshot_serving_size_g,
         ),
     )
@@ -363,8 +356,8 @@ async fn insert_portion(
 /// Macros tuple returned by [compute_portion_macros].
 type MacroTuple = (f64, f64, f64, f64, f64);
 
-/// Snapshot tuple: (food_id, quantity_mode, quantity, snap_cal, snap_prot, snap_carb, snap_fat, snap_fiber, snap_serving_size_g).
-type SnapshotTuple = (i64, String, f64, f64, f64, f64, f64, f64, Option<f64>);
+/// Snapshot tuple: (food_id, quantity_mode, quantity, snapshot_nutrients, snap_serving_size_g).
+type SnapshotTuple = (i64, String, f64, NutrientValues, Option<f64>);
 
 /// Resolve a list of portion inputs into computed macros and snapshots.
 ///
@@ -399,15 +392,19 @@ async fn resolve_portions(
         let (_name, snap_cal, snap_prot, snap_carb, snap_fat, snap_fiber, snap_serving) =
             lookup_food(conn, portion.food_id).await?;
 
+        let snapshot_nutrients = NutrientValues {
+            calories: snap_cal,
+            protein_g: snap_prot,
+            carbs_g: snap_carb,
+            fat_g: snap_fat,
+            fiber_g: snap_fiber,
+        };
+
         let macros = compute_portion_macros(
             portion.quantity,
             &portion.quantity_mode,
             snap_serving,
-            snap_cal,
-            snap_prot,
-            snap_carb,
-            snap_fat,
-            snap_fiber,
+            snapshot_nutrients,
         );
         all_macros.push(macros);
 
@@ -415,11 +412,7 @@ async fn resolve_portions(
             portion.food_id,
             portion.quantity_mode.clone(),
             portion.quantity,
-            snap_cal,
-            snap_prot,
-            snap_carb,
-            snap_fat,
-            snap_fiber,
+            snapshot_nutrients,
             snap_serving,
         ));
     }
@@ -578,15 +571,19 @@ async fn build_meal_summary(conn: &Connection, meal_id: i64) -> Result<MealSumma
             _ => None,
         };
 
+        let snapshot_nutrients = NutrientValues {
+            calories: snap_cal,
+            protein_g: snap_prot,
+            carbs_g: snap_carb,
+            fat_g: snap_fat,
+            fiber_g: snap_fiber,
+        };
+
         let (cal, prot, carb, fat, fiber) = compute_portion_macros(
             quantity,
             &qty_mode,
             snap_serving,
-            snap_cal,
-            snap_prot,
-            snap_carb,
-            snap_fat,
-            snap_fiber,
+            snapshot_nutrients,
         );
 
         portions.push(PortionSummary {
@@ -738,18 +735,14 @@ impl Operation for LogMeal {
             .await?;
 
             // Step 4: Insert portions with correct meal_id
-            for (food_id, qty_mode, qty, sc, sp, scc, sf, sfi, ss) in &snapshots {
+            for (food_id, qty_mode, qty, snapshot_nutrients, ss) in &snapshots {
                 insert_portion(
                     &conn,
                     meal_id,
                     *food_id,
                     qty_mode.as_str(),
                     *qty,
-                    *sc,
-                    *sp,
-                    *scc,
-                    *sf,
-                    *sfi,
+                    *snapshot_nutrients,
                     *ss,
                 )
                 .await?;
@@ -928,18 +921,14 @@ impl Operation for UpdateMeal {
                 // Validate, look up foods, compute macros + snapshots
                 let (all_macros, snapshots) = resolve_portions(&conn, new_portions).await?;
 
-                for (food_id, qty_mode, qty, sc, sp, scc, sf, sfi, ss) in &snapshots {
+                for (food_id, qty_mode, qty, snapshot_nutrients, ss) in &snapshots {
                     insert_portion(
                         &conn,
                         req.meal_id,
                         *food_id,
                         qty_mode.as_str(),
                         *qty,
-                        *sc,
-                        *sp,
-                        *scc,
-                        *sf,
-                        *sfi,
+                        *snapshot_nutrients,
                         *ss,
                     )
                     .await?;
@@ -1064,8 +1053,15 @@ impl Operation for UpdateMeal {
                             turso::Value::Null => None,
                             _ => None,
                         };
+                        let snapshot_nutrients = NutrientValues {
+                            calories: sc,
+                            protein_g: sp,
+                            carbs_g: scc,
+                            fat_g: sf,
+                            fiber_g: sfi,
+                        };
                         all_macros.push(compute_portion_macros(
-                            quantity, &qty_mode, ss, sc, sp, scc, sf, sfi,
+                            quantity, &qty_mode, ss, snapshot_nutrients,
                         ));
                     }
                 }
@@ -1530,8 +1526,15 @@ mod tests {
 
     #[test]
     fn test_compute_portion_macros_grams_mode() {
+        let nutrients = NutrientValues {
+            calories: 250.0,
+            protein_g: 20.0,
+            carbs_g: 30.0,
+            fat_g: 8.0,
+            fiber_g: 3.0,
+        };
         let (cal, prot, carb, fat, fiber) =
-            compute_portion_macros(200.0, "grams", Some(150.0), 250.0, 20.0, 30.0, 8.0, 3.0);
+            compute_portion_macros(200.0, "grams", Some(150.0), nutrients);
         assert!((cal - 500.0).abs() < 0.01);
         assert!((prot - 40.0).abs() < 0.01);
         assert!((carb - 60.0).abs() < 0.01);
@@ -1541,8 +1544,15 @@ mod tests {
 
     #[test]
     fn test_compute_portion_macros_servings_mode() {
+        let nutrients = NutrientValues {
+            calories: 250.0,
+            protein_g: 20.0,
+            carbs_g: 30.0,
+            fat_g: 8.0,
+            fiber_g: 3.0,
+        };
         let (cal, prot, carb, fat, fiber) =
-            compute_portion_macros(2.0, "servings", Some(150.0), 250.0, 20.0, 30.0, 8.0, 3.0);
+            compute_portion_macros(2.0, "servings", Some(150.0), nutrients);
         assert!((cal - 750.0).abs() < 0.01);
         assert!((prot - 60.0).abs() < 0.01);
         assert!((carb - 90.0).abs() < 0.01);
@@ -1552,8 +1562,15 @@ mod tests {
 
     #[test]
     fn test_compute_portion_macros_servings_no_serving_size() {
+        let nutrients = NutrientValues {
+            calories: 250.0,
+            protein_g: 20.0,
+            carbs_g: 30.0,
+            fat_g: 8.0,
+            fiber_g: 3.0,
+        };
         let (cal, _, _, _, _) =
-            compute_portion_macros(100.0, "servings", None, 250.0, 20.0, 30.0, 8.0, 3.0);
+            compute_portion_macros(100.0, "servings", None, nutrients);
         assert!((cal - 250.0).abs() < 0.01);
     }
 
