@@ -11,17 +11,20 @@
 
 use tracing_subscriber::{EnvFilter, util::SubscriberInitExt};
 
+/// Build an `EnvFilter` with the given default level, overridable via `RUST_LOG`.
+pub(crate) fn build_filter(default_level: tracing::Level) -> EnvFilter {
+    EnvFilter::builder()
+        .with_default_directive(default_level.into())
+        .from_env_lossy()
+}
+
 /// Initialize tracing for server mode.
 ///
 /// Installs a subscriber with `info` as the default log level, overridable via
 /// `RUST_LOG`. Writes to stderr with target information enabled.
 pub fn init_server() -> Result<(), tracing_subscriber::util::TryInitError> {
-    let env_filter = EnvFilter::builder()
-        .with_default_directive(tracing::Level::INFO.into())
-        .from_env_lossy();
-
     tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
+        .with_env_filter(build_filter(tracing::Level::INFO))
         .with_target(true)
         .with_writer(std::io::stderr)
         .finish()
@@ -33,12 +36,8 @@ pub fn init_server() -> Result<(), tracing_subscriber::util::TryInitError> {
 /// Installs a subscriber with `warn` as the default log level, overridable via
 /// `RUST_LOG`. Writes to stderr with target information enabled.
 pub fn init_cli() -> Result<(), tracing_subscriber::util::TryInitError> {
-    let env_filter = EnvFilter::builder()
-        .with_default_directive(tracing::Level::WARN.into())
-        .from_env_lossy();
-
     tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
+        .with_env_filter(build_filter(tracing::Level::WARN))
         .with_target(true)
         .with_writer(std::io::stderr)
         .finish()
@@ -50,19 +49,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_init_server_returns_ok() {
-        // try_init() returns Err if a global subscriber is already set,
-        // but in isolation it should succeed
-        let result = init_server();
-        // We can't guarantee Ok in shared test environments, so just check
-        // it doesn't panic. The real validation is that the binary compiles
-        // and runs correctly.
-        let _ = result;
+    fn test_build_filter_server_default() {
+        unsafe { std::env::remove_var("RUST_LOG") };
+        let filter = build_filter(tracing::Level::INFO);
+        let s = format!("{}", filter);
+        assert!(s.contains("info"), "server default filter should contain 'info', got: {}", s);
     }
 
     #[test]
-    fn test_init_cli_returns_ok() {
-        let result = init_cli();
-        let _ = result;
+    fn test_build_filter_cli_default() {
+        unsafe { std::env::remove_var("RUST_LOG") };
+        let filter = build_filter(tracing::Level::WARN);
+        let s = format!("{}", filter);
+        assert!(s.contains("warn"), "cli default filter should contain 'warn', got: {}", s);
+    }
+
+    #[serial_test::serial]
+    #[test]
+    fn test_rust_log_override() {
+        unsafe { std::env::set_var("RUST_LOG", "error") };
+        let filter = build_filter(tracing::Level::INFO);
+        let s = format!("{}", filter);
+        assert!(s.contains("error"), "RUST_LOG=error should override default, got: {}", s);
+        assert!(!s.contains("info"), "override should not contain default info, got: {}", s);
+        unsafe { std::env::remove_var("RUST_LOG") };
     }
 }

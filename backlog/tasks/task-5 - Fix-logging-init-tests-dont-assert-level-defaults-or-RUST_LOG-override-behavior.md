@@ -3,11 +3,14 @@ id: TASK-5
 title: >-
   Fix: logging init tests don't assert level defaults or RUST_LOG override
   behavior
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@ralph'
 created_date: '2026-08-11 23:16'
+updated_date: '2026-08-12 04:28'
 labels:
   - review-followup
+  - planned
 dependencies:
   - TASK-2.4
 priority: high
@@ -23,30 +26,34 @@ Found while reviewing TASK-2.4 (nom-core/src/logging.rs, test_init_server_return
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A test asserts, without relying on process-global subscriber install order, that init_server()'s default level is INFO and init_cli()'s default level is WARN when RUST_LOG is unset
-- [ ] #2 A test asserts that RUST_LOG overrides the default level for at least one of init_server()/init_cli()
-- [ ] #3 nix develop -c cargo test -p nom-core passes
+- [x] #1 A test asserts, without relying on process-global subscriber install order, that init_server()'s default level is INFO and init_cli()'s default level is WARN when RUST_LOG is unset
+- [x] #2 A test asserts that RUST_LOG overrides the default level for at least one of init_server()/init_cli()
+- [x] #3 nix develop -c cargo test -p nom-core passes
 <!-- AC:END -->
 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-SETUP (read first): This is a Rust Cargo workspace with two crates: nom-core/ (library) and nom-mcp/ (binaries). ALL commands must run inside the Nix dev shell: either run 'direnv allow' once, or prefix every command with 'nix develop -c'. Work from the repository root unless told otherwise. Do not change pinned dependency versions.
+This is a single-file change (nom-core/src/logging.rs). No sub-tickets needed.
 
-Note: this repo's actual layout is nom-core/ (library) and nom-mcp/ (binaries), not crates/gql-core / web/ — use nom-core/ for all paths below.
+**Step 1: Extract build_filter helper**
+- Add pub(crate) fn build_filter(default_level: tracing::Level) -> EnvFilter
+- Both init_server() and init_cli() call this instead of inline builder calls
 
-1. Open nom-core/src/logging.rs. init_server() and init_cli() currently build an EnvFilter via EnvFilter::builder().with_default_directive(LEVEL.into()).from_env_lossy() and immediately install it globally via tracing_subscriber::fmt()....try_init(), which is why the level itself isn't independently observable or testable after the fact — the test can only see whether try_init() succeeded, not what level it configured, and only the first test in the binary gets Ok at all.
+**Step 2: Add 3 new tests replacing the existing no-op tests**
+- test_build_filter_server_default: clear RUST_LOG, assert format!("{}", build_filter(INFO)) == "info"
+- test_build_filter_cli_default: clear RUST_LOG, assert format!("{}", build_filter(WARN)) == "warn"
+- test_rust_log_override: set RUST_LOG="error", assert filter contains "error" not default; guard with #[serial_test::serial] since RUST_LOG is process-global
 
-2. Refactor so the EnvFilter construction is a separate, directly-testable unit: extract a private (or pub(crate)) helper, e.g. fn build_filter(default_level: tracing::Level) -> EnvFilter, that both init_server() and init_cli() call before installing it. init_server()/init_cli() keep their existing public signatures and behavior (still call try_init() as before) — only the filter-construction step moves into the new helper.
+**Step 3: Remove old tests**
+- Delete test_init_server_returns_ok and test_init_cli_returns_ok (they asserted nothing useful)
 
-3. EnvFilter does not expose a simple 'what level did you end up with' accessor, so test the helper indirectly via its string form or via to_string()/directives if EnvFilter's pinned version (check Cargo.lock) supports inspecting it; if it does not, test the observable behavior instead by checking EnvFilter::builder().with_default_directive(...).from_env_lossy().to_string() reflects 'info' vs 'warn' as the default, and reflects a RUST_LOG override when the env var is set via a scoped std::env::set_var/remove_var in the test (guard with a test-only mutex or #[serial] from the serial_test dev-dependency already used elsewhere in this crate, since env vars are process-global and tests run concurrently by default).
-
-4. Add tests in the existing #[cfg(test)] mod in logging.rs:
-   - test_server_default_level_is_info: no RUST_LOG set, asserts the built filter reflects 'info'
-   - test_cli_default_level_is_warn: no RUST_LOG set, asserts the built filter reflects 'warn'
-   - test_rust_log_overrides_default: sets RUST_LOG to a distinct level (e.g. 'error') before building either filter, asserts the override is reflected instead of the default
-
-5. Keep (or fold into the new tests) the existing test_init_server_returns_ok/test_init_cli_returns_ok if they still add value verifying try_init() doesn't panic; otherwise replace them.
-
-6. Run: nix develop -c cargo test -p nom-core. Must pass before closing this ticket.
+**Step 4: Verify**
+- nix develop -c cargo test -p nom-core
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Extracted pub(crate) fn build_filter(default_level) -> EnvFilter from init_server()/init_cli(). Both init functions now delegate filter creation to this helper. Replaced two no-op tests with three assertion-based tests: test_build_filter_server_default (asserts 'info' in filter string), test_build_filter_cli_default (asserts 'warn'), test_rust_log_override (sets RUST_LOG=error, asserts override). Used #[serial_test::serial] on the RUST_LOG test since env vars are process-global. All 113 nom-core tests pass.
+<!-- SECTION:NOTES:END -->
