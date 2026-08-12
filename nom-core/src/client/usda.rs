@@ -296,9 +296,10 @@ impl FdcClient {
 
         tracing::debug!(query, page, "USDA FDC search request");
 
+        let base = self.base_url.as_str().trim_end_matches('/');
         let resp = self
             .http
-            .post(format!("{}/v1/foods/search", self.base_url))
+            .post(format!("{}/v1/foods/search", base))
             .query(&[("api_key", &self.api_key)])
             .json(&body)
             .send()
@@ -338,9 +339,10 @@ impl FdcClient {
             .collect::<Vec<_>>()
             .join(",");
 
+        let base = self.base_url.as_str().trim_end_matches('/');
         let resp = self
             .http
-            .get(format!("{}/v1/food/{fdc_id}", self.base_url))
+            .get(format!("{}/v1/food/{fdc_id}", base))
             .query(&[("api_key", &self.api_key)])
             .query(&[("nutrientNumber", &nutrient_ids)])
             .send()
@@ -379,9 +381,10 @@ impl FdcClient {
 
             tracing::debug!(count = chunk.len(), "USDA FDC batch request");
 
+            let base = self.base_url.as_str().trim_end_matches('/');
             let resp = self
                 .http
-                .post(format!("{}/v1/foods", self.base_url))
+                .post(format!("{}/v1/foods", base))
                 .query(&[("api_key", &self.api_key)])
                 .json(&body)
                 .send()
@@ -403,7 +406,7 @@ impl FdcClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{body_partial_json, method, query_param};
+    use wiremock::matchers::{body_partial_json, method, path, query_param};
     use wiremock::{Mock, ResponseTemplate};
 
     // -- Serde deserialization tests --
@@ -688,6 +691,7 @@ mod tests {
         let base_url = server.uri();
 
         Mock::given(method("POST"))
+            .and(path("/v1/foods/search"))
             .and(body_partial_json(
                 serde_json::json!({"dataType": DATA_TYPES}),
             ))
@@ -867,5 +871,36 @@ mod tests {
         let client = FdcClient::new("http://127.0.0.1:54321", "test-key").unwrap();
         let err = client.search_foods("test", 1).await.unwrap_err();
         assert!(matches!(err, FdcError::Request(_)));
+    }
+
+    /// Verify request path is correct when base_url has no trailing path segment.
+    /// wiremock::MockServer::uri() returns a bare origin like "http://127.0.0.1:XXXX"
+    /// which url::Url normalizes to "http://127.0.0.1:XXXX/" — the path matcher
+    /// confirms we send "/v1/foods/search" (single slash), not "/v1/foods/search"
+    /// with a double leading slash.
+    #[tokio::test]
+    async fn test_url_no_double_slash_with_bare_origin() {
+        let server = wiremock::MockServer::start().await;
+        let base_url = server.uri();
+
+        // The path matcher requires an exact single-slash path.
+        // If the code produced "//v1/foods/search" the mock would NOT match
+        // and the test would fail with "request did not match mock".
+        Mock::given(method("POST"))
+            .and(path("/v1/foods/search"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(make_search_json(&["Bare Origin Test"])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = FdcClient::new(&base_url, "test-key").unwrap();
+        let result = client.search_foods("test", 1).await.unwrap();
+        assert_eq!(result.food_matches.len(), 1);
+        assert_eq!(
+            result.food_matches[0].description,
+            Some("Bare Origin Test".into())
+        );
     }
 }

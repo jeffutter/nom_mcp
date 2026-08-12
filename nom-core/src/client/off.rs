@@ -117,6 +117,7 @@ impl OffClient {
         let normalized = barcode.replace(['-', ' ', '\t'], "");
 
         // Build URL with fields= param to minimize payload
+        let base = self.base_url.as_str().trim_end_matches('/');
         let fields = [
             "code",
             "product_name",
@@ -135,7 +136,7 @@ impl OffClient {
         ];
         let url = format!(
             "{}/api/v2/product/{}?fields={}",
-            self.base_url,
+            base,
             normalized,
             fields.join(",")
         );
@@ -154,7 +155,7 @@ impl OffClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{header, method};
+    use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, ResponseTemplate};
 
     // -- Serde deserialization tests --
@@ -296,6 +297,7 @@ mod tests {
         let base_url = server.uri();
 
         Mock::given(method("GET"))
+            .and(path("/api/v2/product/123456"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "code": "123456",
                 "status": 1,
