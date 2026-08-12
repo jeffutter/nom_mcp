@@ -7,12 +7,11 @@ use std::sync::Arc;
 
 use nom_core::client::{off::OffClient, usda::FdcClient};
 use nom_core::clock::Clock;
-use nom_core::config::{AppConfig, db_path};
+use nom_core::config::AppConfig;
 use nom_core::error::{ErrorData, cli_exit};
 use nom_core::food::{CreateCustomFood, SearchFood};
 use nom_core::meal::{DeleteMeal, GetMealsByDateRange, LogMeal, SearchMeals, UpdateMeal};
 use nom_core::operation::OperationRegistry;
-use nom_core::storage::lock_probe;
 
 fn main() {
     // Initialize tracing for CLI mode (best-effort; failure doesn't crash)
@@ -28,14 +27,6 @@ pub fn execute_from_args(args: &[String]) -> Result<serde_json::Value, ErrorData
     // Load config
     let config = AppConfig::load()
         .map_err(|e| ErrorData::storage_failure(format!("failed to load config: {e}")))?;
-
-    // Probe the database lock BEFORE opening any connection.
-    // Local CLI always executes in-process against the local DB file.
-    if lock_probe::probe_db_lock(&db_path())
-        .map_err(|e| ErrorData::storage_failure(format!("failed to probe lock: {e}")))?
-    {
-        return Err(ErrorData::conflict("local_db_locked"));
-    }
 
     let clock = Arc::new(Clock::new(&config)?);
 

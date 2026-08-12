@@ -14,32 +14,26 @@ pub struct Connection {
 }
 
 impl Connection {
-    /// Open a database at the configured path, enabling FK enforcement.
-    ///
-    /// Creates parent directories if needed, opens the database in local-file
-    /// mode, enables foreign key enforcement, and runs pending migrations.
-    pub async fn open() -> Result<Self, StorageError> {
-        Self::open_at(&db_path()).await
-    }
-
-    /// Open a database safely, probing for an advisory lock first.
+    /// Open a database at the configured path, probing for an advisory lock first.
     ///
     /// Before opening the database, checks if another process holds a write
     /// lock using POSIX `fcntl` advisory locks (same mechanism Turso uses).
     /// If the lock is held, returns a `Conflict` error instead of risking
     /// silent WAL corruption.
     ///
-    /// Tests should use [`Connection::open_at`] directly to bypass the probe.
-    pub async fn open_safe(path: &Path) -> Result<Self, StorageError> {
+    /// Creates parent directories if needed, opens the database in local-file
+    /// mode, enables foreign key enforcement, and runs pending migrations.
+    pub async fn open() -> Result<Self, StorageError> {
+        let db_path = db_path();
         // Probe the lock BEFORE constructing a Turso database
-        if super::lock_probe::probe_db_lock(path)
+        if super::lock_probe::probe_db_lock(&db_path)
             .map_err(|e| StorageError::Io(format!("failed to probe database lock: {e}")))?
         {
             return Err(StorageError::Database(
                 "database file is locked by another process".to_string(),
             ));
         }
-        Self::open_at(path).await
+        Self::open_at(&db_path).await
     }
 
     /// Open a database at an arbitrary path (used by tests).
