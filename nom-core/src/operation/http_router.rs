@@ -49,6 +49,7 @@ async fn handle_operation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clock::Clock;
     use crate::operation::{Operation, OperationRegistry};
 
     struct TestOp;
@@ -74,7 +75,7 @@ mod tests {
 
     #[test]
     fn test_build_http_router_has_routes() {
-        let mut reg = OperationRegistry::new();
+        let mut reg = OperationRegistry::new(Arc::new(Clock { tz: chrono_tz::UTC }));
         reg.register(Arc::new(TestOp));
         let router = build_http_router(reg);
         // The router should have routes registered

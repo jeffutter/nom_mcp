@@ -7,21 +7,28 @@
 use std::sync::Arc;
 
 use super::{Operation, Surfaces};
+use crate::clock::Clock;
 
 /// Registry of domain operations, shared across CLI, HTTP, and MCP surfaces.
 ///
 /// Adding an operation to the registry automatically makes it available on
 /// every surface the operation declares via `.surfaces()`.
-#[derive(Default)]
 pub struct OperationRegistry {
     operations: Vec<Arc<dyn Operation>>,
+    clock: Arc<Clock>,
 }
 
 impl OperationRegistry {
-    pub fn new() -> Self {
+    pub fn new(clock: Arc<Clock>) -> Self {
         Self {
             operations: Vec::new(),
+            clock,
         }
+    }
+
+    /// Access the shared Clock for date computations.
+    pub fn clock(&self) -> &Clock {
+        &self.clock
     }
 
     /// Register an operation in the registry.
@@ -62,6 +69,10 @@ impl OperationRegistry {
 mod tests {
     use super::*;
 
+    fn make_clock() -> Arc<Clock> {
+        Arc::new(Clock { tz: chrono_tz::UTC })
+    }
+
     // Minimal mock operation for testing
     struct MockOp {
         name: &'static str,
@@ -93,7 +104,7 @@ mod tests {
 
     #[test]
     fn test_register_and_get() {
-        let mut registry = OperationRegistry::new();
+        let mut registry = OperationRegistry::new(make_clock());
         let op = Arc::new(MockOp {
             name: "test_op",
             description: "A test operation",
@@ -106,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_filter_by_cli_surface() {
-        let mut registry = OperationRegistry::new();
+        let mut registry = OperationRegistry::new(make_clock());
         registry.register(Arc::new(MockOp {
             name: "cli_only",
             description: "CLI only",
@@ -131,7 +142,7 @@ mod tests {
 
     #[test]
     fn test_filter_by_http_surface() {
-        let mut registry = OperationRegistry::new();
+        let mut registry = OperationRegistry::new(make_clock());
         registry.register(Arc::new(MockOp {
             name: "cli_only",
             description: "CLI only",
@@ -150,7 +161,7 @@ mod tests {
 
     #[test]
     fn test_filter_by_mcp_surface() {
-        let mut registry = OperationRegistry::new();
+        let mut registry = OperationRegistry::new(make_clock());
         registry.register(Arc::new(MockOp {
             name: "mcp_only",
             description: "MCP only",
@@ -195,10 +206,23 @@ mod tests {
 
     #[test]
     fn test_empty_registry() {
-        let registry = OperationRegistry::new();
+        let registry = OperationRegistry::new(make_clock());
         assert!(registry.is_empty());
         assert_eq!(registry.len(), 0);
         assert!(registry.get("anything").is_none());
         assert_eq!(registry.filter_by_surface(Surfaces::ALL).len(), 0);
+    }
+
+    #[test]
+    fn test_clock_accessor() {
+        let tz: chrono_tz::Tz = "America/New_York".parse().unwrap();
+        let clock = Clock { tz };
+        let registry = OperationRegistry::new(Arc::new(clock));
+        // Verify the clock is accessible through the registry
+        let today = registry.clock().today();
+        // Just verify it returns a valid date (within ±1 day of current UTC date)
+        let now = chrono::Utc::now().date_naive();
+        let diff = (today - now).num_days().abs();
+        assert!(diff <= 2, "clock accessor should return reasonable date");
     }
 }

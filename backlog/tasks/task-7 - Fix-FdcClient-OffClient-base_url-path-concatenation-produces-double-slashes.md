@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@ralph'
 created_date: '2026-08-12 01:06'
-updated_date: '2026-08-12 02:18'
+updated_date: '2026-08-12 02:19'
 labels:
   - review-followup
   - planned
@@ -116,4 +116,12 @@ All are covered by the wiremock tests since `server.uri()` produces bare-origin 
 
 <!-- SECTION:NOTES:BEGIN -->
 Independently corroborated by an automated /code-review pass over usda.rs, which also verified via the url crate that Url::parse("http://localhost:1234").as_str() == "http://localhost:1234/" and that format!("{}/v1/...", that) yields a double slash. IMPORTANT caveat for whoever implements this: do NOT naively swap in self.base_url.join("v1/foods/search") as the fix. Url::join follows RFC 3986 relative-reference resolution — since FdcClient's production base_url is "https://api.nal.usda.gov/fdc" (no trailing slash, last path segment is 'fdc'), .join("v1/foods/search") REPLACES that last segment instead of appending to it, producing "https://api.nal.usda.gov/v1/foods/search" (silently dropping /fdc) — a new, worse bug. Any fix must be verified against both a base_url with a path segment (USDA's real default) and one without (OFF's real default and bare-origin test URLs) before trusting it; the trim_end_matches('/') approach in the plan already accounts for this, .join() does not without also appending a trailing slash to base_url first.
+
+Fixed double-slash URL bug in FdcClient (3 call sites) and OffClient (1 call site) by adding trim_end_matches('/') before each format! macro. Added wiremock path() assertions to test_lookup_barcode_success (off.rs), test_search_foods_success (usda.rs), and a new dedicated test_url_no_double_slash_with_bare_origin test. All 96 tests pass, clippy clean, fmt clean.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Fixed double-slash URL concatenation bug in FdcClient/OffClient by trimming trailing slashes from base_url before format! macros. Added wiremock path assertions to verify correct request paths. All 5 acceptance criteria verified: (1) URLs build without double slashes, (2) path() matchers added to tests, (3) cargo test passes (96 tests), (4) clippy clean, (5) fmt check passes.
+<!-- SECTION:FINAL_SUMMARY:END -->

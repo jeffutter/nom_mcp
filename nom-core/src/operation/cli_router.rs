@@ -86,7 +86,12 @@ fn parse_value(s: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clock::Clock;
     use crate::operation::registry::OperationRegistry;
+
+    fn make_clock() -> Arc<Clock> {
+        Arc::new(Clock { tz: chrono_tz::UTC })
+    }
 
     struct TestOp {
         name: &'static str,
@@ -114,7 +119,7 @@ mod tests {
 
     #[test]
     fn test_build_cli_command_includes_cli_ops() {
-        let mut reg = OperationRegistry::new();
+        let mut reg = OperationRegistry::new(make_clock());
         reg.register(Arc::new(TestOp {
             name: "food-search",
             surfaces: Surfaces::ALL,
@@ -133,7 +138,7 @@ mod tests {
 
     #[test]
     fn test_parse_and_dispatch_no_subcommand() {
-        let reg = OperationRegistry::new();
+        let reg = OperationRegistry::new(make_clock());
         let result = parse_and_dispatch(&reg, &["nom-mcp".to_string()]);
         assert!(result.is_err());
     }

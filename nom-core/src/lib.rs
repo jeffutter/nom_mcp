@@ -18,6 +18,7 @@
 //! - `error` — unified ErrorData taxonomy
 
 pub mod client;
+pub mod clock;
 pub mod config;
 pub mod error;
 pub mod logging;

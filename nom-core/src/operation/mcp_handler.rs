@@ -149,7 +149,12 @@ fn tool_from_operation(op: &dyn Operation) -> Result<Tool, ErrorData> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clock::Clock;
     use crate::operation::registry::OperationRegistry;
+
+    fn make_clock() -> Arc<Clock> {
+        Arc::new(Clock { tz: chrono_tz::UTC })
+    }
 
     struct TestOp;
 
@@ -200,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_mcp_handler_new() {
-        let mut reg = OperationRegistry::new();
+        let mut reg = OperationRegistry::new(make_clock());
         reg.register(Arc::new(TestOp));
         let handler = McpHandler::new(reg);
         assert_eq!(
@@ -219,7 +224,7 @@ mod tests {
 
     #[test]
     fn test_empty_registry_list_tools() {
-        let handler = McpHandler::new(OperationRegistry::new());
+        let handler = McpHandler::new(OperationRegistry::new(make_clock()));
         let tools = handler.build_tools();
         assert!(tools.is_empty(), "empty registry should produce no tools");
     }
@@ -236,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_get_tool_skips_bad_schema() {
-        let mut reg = OperationRegistry::new();
+        let mut reg = OperationRegistry::new(make_clock());
         reg.register(Arc::new(BadSchemaOp));
         let handler = McpHandler::new(reg);
         // get_tool should return None for operations with bad schemas (no panic)
@@ -245,7 +250,7 @@ mod tests {
 
     #[test]
     fn test_list_tools_omits_bad_schema_but_keeps_good_ops() {
-        let mut reg = OperationRegistry::new();
+        let mut reg = OperationRegistry::new(make_clock());
         reg.register(Arc::new(TestOp));
         reg.register(Arc::new(BadSchemaOp));
         let handler = McpHandler::new(reg);

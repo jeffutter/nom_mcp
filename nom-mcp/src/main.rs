@@ -3,7 +3,12 @@
 //! Local-CLI path: parses arguments, dispatches to operations, renders errors
 //! through the shared `cli_exit`/`render_error` functions from `nom-core`.
 
+use std::sync::Arc;
+
+use nom_core::clock::Clock;
+use nom_core::config::AppConfig;
 use nom_core::error::{ErrorData, cli_exit};
+use nom_core::operation::OperationRegistry;
 
 fn main() {
     // Initialize tracing for CLI mode (best-effort; failure doesn't crash)
@@ -16,7 +21,18 @@ fn main() {
 /// Execute an operation from command-line arguments.
 /// Returns structured JSON on success, or unified ErrorData on failure.
 pub fn execute_from_args(_args: &[String]) -> Result<serde_json::Value, ErrorData> {
-    // TODO: parse arguments, probe lock, dispatch to Operation registry.
+    // Load config and create Clock
+    let config = AppConfig::load()
+        .map_err(|e| ErrorData::storage_failure(format!("failed to load config: {e}")))?;
+    let clock = Arc::new(Clock::new(&config)?);
+
+    // Build registry with Clock — all surfaces share this Clock
+    let _registry = OperationRegistry::new(clock.clone());
+
+    // TODO: register domain operations
+    // Future tasks will populate the registry here
+
     // For now, return a placeholder so the error path is wired correctly.
-    Ok(serde_json::json!({ "status": "placeholder" }))
+    let today = clock.today();
+    Ok(serde_json::json!({ "status": "ok", "today": Clock::format_date(today) }))
 }
