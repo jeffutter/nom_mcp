@@ -131,7 +131,7 @@ fn compute_portion_macros(
     quantity_mode: &str,
     snapshot_serving_size_g: Option<f64>,
     snapshot_nutrients: NutrientValues,
-) -> (f64, f64, f64, f64, f64) {
+) -> NutrientValues {
     let effective_grams = if quantity_mode == "servings" {
         match snapshot_serving_size_g {
             Some(serving_size) => serving_size * quantity,
@@ -142,18 +142,18 @@ fn compute_portion_macros(
     };
 
     let factor = effective_grams / 100.0;
-    (
-        snapshot_nutrients.calories * factor,
-        snapshot_nutrients.protein_g * factor,
-        snapshot_nutrients.carbs_g * factor,
-        snapshot_nutrients.fat_g * factor,
-        snapshot_nutrients.fiber_g * factor,
-    )
+    NutrientValues {
+        calories: snapshot_nutrients.calories * factor,
+        protein_g: snapshot_nutrients.protein_g * factor,
+        carbs_g: snapshot_nutrients.carbs_g * factor,
+        fat_g: snapshot_nutrients.fat_g * factor,
+        fiber_g: snapshot_nutrients.fiber_g * factor,
+    }
 }
 
 /// Compute materialized totals from portions + optional adjustment.
 fn compute_totals(
-    portions: &[(f64, f64, f64, f64, f64)],
+    portions: &[NutrientValues],
     adjustment: Option<&Adjustment>,
 ) -> MealTotals {
     let mut totals = MealTotals {
@@ -164,12 +164,12 @@ fn compute_totals(
         total_fiber_g: 0.0,
     };
 
-    for (cal, prot, carb, fat, fiber) in portions {
-        totals.total_calories += cal;
-        totals.total_protein_g += prot;
-        totals.total_carbs_g += carb;
-        totals.total_fat_g += fat;
-        totals.total_fiber_g += fiber;
+    for n in portions {
+        totals.total_calories += n.calories;
+        totals.total_protein_g += n.protein_g;
+        totals.total_carbs_g += n.carbs_g;
+        totals.total_fat_g += n.fat_g;
+        totals.total_fiber_g += n.fiber_g;
     }
 
     if let Some(adj) = adjustment {
@@ -353,9 +353,6 @@ async fn insert_portion(
     Ok(())
 }
 
-/// Macros tuple returned by [compute_portion_macros].
-type MacroTuple = (f64, f64, f64, f64, f64);
-
 /// Snapshot tuple: (food_id, quantity_mode, quantity, snapshot_nutrients, snap_serving_size_g).
 type SnapshotTuple = (i64, String, f64, NutrientValues, Option<f64>);
 
@@ -368,8 +365,8 @@ type SnapshotTuple = (i64, String, f64, NutrientValues, Option<f64>);
 async fn resolve_portions(
     conn: &Connection,
     portions: &[PortionInput],
-) -> Result<(Vec<MacroTuple>, Vec<SnapshotTuple>), ErrorData> {
-    let mut all_macros: Vec<MacroTuple> = Vec::new();
+) -> Result<(Vec<NutrientValues>, Vec<SnapshotTuple>), ErrorData> {
+    let mut all_macros: Vec<NutrientValues> = Vec::new();
     let mut snapshots: Vec<SnapshotTuple> = Vec::new();
 
     for portion in portions {
@@ -579,12 +576,7 @@ async fn build_meal_summary(conn: &Connection, meal_id: i64) -> Result<MealSumma
             fiber_g: snap_fiber,
         };
 
-        let (cal, prot, carb, fat, fiber) = compute_portion_macros(
-            quantity,
-            &qty_mode,
-            snap_serving,
-            snapshot_nutrients,
-        );
+        let macros = compute_portion_macros(quantity, &qty_mode, snap_serving, snapshot_nutrients);
 
         portions.push(PortionSummary {
             id: pid,
@@ -592,11 +584,11 @@ async fn build_meal_summary(conn: &Connection, meal_id: i64) -> Result<MealSumma
             food_name,
             quantity_mode: qty_mode,
             quantity,
-            calories: cal,
-            protein_g: prot,
-            carbs_g: carb,
-            fat_g: fat,
-            fiber_g: fiber,
+            calories: macros.calories,
+            protein_g: macros.protein_g,
+            carbs_g: macros.carbs_g,
+            fat_g: macros.fat_g,
+            fiber_g: macros.fiber_g,
         });
     }
 
@@ -1002,7 +994,7 @@ impl Operation for UpdateMeal {
                 .map_err(|e| ErrorData::storage_failure(format!("update totals failed: {e}")))?;
             } else if req.adjustment.is_some() {
                 // Only adjustment changed — recompute from existing portions
-                let mut all_macros: Vec<(f64, f64, f64, f64, f64)> = Vec::new();
+                let mut all_macros: Vec<NutrientValues> = Vec::new();
                 {
                     let sql = r#"
                         SELECT p.quantity_mode, p.quantity,
@@ -1061,7 +1053,10 @@ impl Operation for UpdateMeal {
                             fiber_g: sfi,
                         };
                         all_macros.push(compute_portion_macros(
-                            quantity, &qty_mode, ss, snapshot_nutrients,
+                            quantity,
+                            &qty_mode,
+                            ss,
+                            snapshot_nutrients,
                         ));
                     }
                 }
@@ -1533,13 +1528,12 @@ mod tests {
             fat_g: 8.0,
             fiber_g: 3.0,
         };
-        let (cal, prot, carb, fat, fiber) =
-            compute_portion_macros(200.0, "grams", Some(150.0), nutrients);
-        assert!((cal - 500.0).abs() < 0.01);
-        assert!((prot - 40.0).abs() < 0.01);
-        assert!((carb - 60.0).abs() < 0.01);
-        assert!((fat - 16.0).abs() < 0.01);
-        assert!((fiber - 6.0).abs() < 0.01);
+        let result = compute_portion_macros(200.0, "grams", Some(150.0), nutrients);
+        assert!((result.calories - 500.0).abs() < 0.01);
+        assert!((result.protein_g - 40.0).abs() < 0.01);
+        assert!((result.carbs_g - 60.0).abs() < 0.01);
+        assert!((result.fat_g - 16.0).abs() < 0.01);
+        assert!((result.fiber_g - 6.0).abs() < 0.01);
     }
 
     #[test]
@@ -1551,13 +1545,12 @@ mod tests {
             fat_g: 8.0,
             fiber_g: 3.0,
         };
-        let (cal, prot, carb, fat, fiber) =
-            compute_portion_macros(2.0, "servings", Some(150.0), nutrients);
-        assert!((cal - 750.0).abs() < 0.01);
-        assert!((prot - 60.0).abs() < 0.01);
-        assert!((carb - 90.0).abs() < 0.01);
-        assert!((fat - 24.0).abs() < 0.01);
-        assert!((fiber - 9.0).abs() < 0.01);
+        let result = compute_portion_macros(2.0, "servings", Some(150.0), nutrients);
+        assert!((result.calories - 750.0).abs() < 0.01);
+        assert!((result.protein_g - 60.0).abs() < 0.01);
+        assert!((result.carbs_g - 90.0).abs() < 0.01);
+        assert!((result.fat_g - 24.0).abs() < 0.01);
+        assert!((result.fiber_g - 9.0).abs() < 0.01);
     }
 
     #[test]
@@ -1569,16 +1562,15 @@ mod tests {
             fat_g: 8.0,
             fiber_g: 3.0,
         };
-        let (cal, _, _, _, _) =
-            compute_portion_macros(100.0, "servings", None, nutrients);
-        assert!((cal - 250.0).abs() < 0.01);
+        let result = compute_portion_macros(100.0, "servings", None, nutrients);
+        assert!((result.calories - 250.0).abs() < 0.01);
     }
 
     #[test]
     fn test_compute_totals_basic() {
         let portions = vec![
-            (100.0, 10.0, 15.0, 5.0, 2.0),
-            (200.0, 20.0, 30.0, 10.0, 4.0),
+            NutrientValues { calories: 100.0, protein_g: 10.0, carbs_g: 15.0, fat_g: 5.0, fiber_g: 2.0 },
+            NutrientValues { calories: 200.0, protein_g: 20.0, carbs_g: 30.0, fat_g: 10.0, fiber_g: 4.0 },
         ];
         let totals = compute_totals(&portions, None);
         assert_eq!(totals.total_calories, 300.0);
@@ -1590,7 +1582,7 @@ mod tests {
 
     #[test]
     fn test_compute_totals_with_adjustment() {
-        let portions = vec![(100.0, 10.0, 15.0, 5.0, 2.0)];
+        let portions = vec![NutrientValues { calories: 100.0, protein_g: 10.0, carbs_g: 15.0, fat_g: 5.0, fiber_g: 2.0 }];
         let adj = Adjustment {
             calories: Some(-50.0),
             protein_g: None,

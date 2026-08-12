@@ -3,11 +3,14 @@ id: TASK-20
 title: >-
   Fix: compute_portion_macros/compute_totals return a bare positional f64 tuple,
   reintroducing the transposition hazard TASK-19 fixed on the input side
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@ralph'
 created_date: '2026-08-12 22:47'
+updated_date: '2026-08-12 22:59'
 labels:
   - review-followup
+  - planned
 dependencies:
   - TASK-19
 priority: high
@@ -22,28 +25,54 @@ Found while reviewing TASK-16/TASK-19 (nom-core/src/meal/mod.rs:129-134 compute_
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 compute_portion_macros returns a named struct (reuse the existing NutrientValues struct from nom-core/src/food/mod.rs, matching the pattern TASK-19 already established for its input parameter) instead of a bare (f64,f64,f64,f64,f64) tuple
-- [ ] #2 compute_totals's portions parameter is &[NutrientValues] (or equivalent named type) instead of &[(f64,f64,f64,f64,f64)], and its accumulation loop accesses named fields instead of positional tuple destructuring
-- [ ] #3 the three call sites (compute_totals's loop at meal/mod.rs:167, build_meal_summary at meal/mod.rs:582, and UpdateMeal's adjustment-only recompute around meal/mod.rs:1063) are updated accordingly; no positional 5-f64-tuple destructuring of macro values remains in non-test code
-- [ ] #4 nix develop -c cargo clippy --workspace --all-targets is clean
-- [ ] #5 nix develop -c cargo test -p nom-core passes
+- [x] #1 compute_portion_macros returns a named struct (reuse the existing NutrientValues struct from nom-core/src/food/mod.rs, matching the pattern TASK-19 already established for its input parameter) instead of a bare (f64,f64,f64,f64,f64) tuple
+- [x] #2 compute_totals's portions parameter is &[NutrientValues] (or equivalent named type) instead of &[(f64,f64,f64,f64,f64)], and its accumulation loop accesses named fields instead of positional tuple destructuring
+- [x] #3 the three call sites (compute_totals's loop at meal/mod.rs:167, build_meal_summary at meal/mod.rs:582, and UpdateMeal's adjustment-only recompute around meal/mod.rs:1063) are updated accordingly; no positional 5-f64-tuple destructuring of macro values remains in non-test code
+- [x] #4 nix develop -c cargo clippy --workspace --all-targets is clean
+- [x] #5 nix develop -c cargo test -p nom-core passes
 <!-- AC:END -->
 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-SETUP (read first): This is a Rust+WebAssembly core (crates/gql-core) with a TypeScript/React web app (web/). ALL commands must run inside the Nix dev shell: either run 'direnv allow' once, or prefix every command with 'nix develop -c'. Work from the repository root unless told otherwise. Do not change pinned dependency versions.
+Pure refactor — zero behavioral change. All changes in nom-core/src/meal/mod.rs. Reuse existing pub(crate) NutrientValues from food module (already imported at meal/mod.rs:21).
 
-Pure refactor -- zero behavioral change. Reuse the existing NutrientValues struct from nom-core/src/food/mod.rs (already made pub(crate) with pub(crate) fields by TASK-19) instead of creating a new type.
+## Step-by-step changes (all in nom-core/src/meal/mod.rs):
 
-1. Open nom-core/src/meal/mod.rs and change compute_portion_macros's return type (line ~134) from '(f64, f64, f64, f64, f64)' to 'NutrientValues'. Update its body (lines ~144-151) to construct 'NutrientValues { calories: ..., protein_g: ..., carbs_g: ..., fat_g: ..., fiber_g: ... }' instead of a tuple literal.
-2. Change compute_totals's signature (line ~155-158) from 'portions: &[(f64, f64, f64, f64, f64)]' to 'portions: &[NutrientValues]'. Update the accumulation loop (line ~167) from 'for (cal, prot, carb, fat, fiber) in portions { totals.total_calories += cal; ... }' to iterate NutrientValues and accumulate via named fields (e.g. 'for n in portions { totals.total_calories += n.calories; totals.total_protein_g += n.protein_g; ... }').
-3. Update the MacroTuple type alias (meal/mod.rs:357) -- either remove it and use NutrientValues directly everywhere it's used (resolve_portions's Vec<MacroTuple> return, all_macros accumulation), or repoint the alias to NutrientValues. Prefer removing the alias if NutrientValues is used consistently, since a second name for the same type adds an interaction point without value.
-4. Update resolve_portions (meal/mod.rs:363-419ish) so 'all_macros: Vec<NutrientValues>' accumulates struct values from compute_portion_macros directly.
-5. Update build_meal_summary (meal/mod.rs:582): replace 'let (cal, prot, carb, fat, fiber) = compute_portion_macros(...)' with 'let macros = compute_portion_macros(...)' and use macros.calories / macros.protein_g / macros.carbs_g / macros.fat_g / macros.fiber_g when constructing PortionSummary.
-6. Update UpdateMeal's adjustment-only recompute (meal/mod.rs ~1063): 'all_macros.push(compute_portion_macros(quantity, &qty_mode, ss, snapshot_nutrients))' already pushes the return value directly -- no change needed there beyond the type change flowing through, but confirm all_macros's declared type (search nearby, likely 'Vec<MacroTuple>' or 'Vec<(f64,f64,f64,f64,f64)>') is updated to 'Vec<NutrientValues>'.
-7. Update the 3 unit tests for compute_portion_macros (meal/mod.rs ~1528-1573) that currently destructure the tuple return ('let (cal, prot, carb, fat, fiber) = compute_portion_macros(...)') to access named fields on the returned NutrientValues instead.
-8. Run: nix develop -c cargo fmt -p nom-core
-9. Run: nix develop -c cargo clippy --workspace --all-targets -- confirm clean, no new warnings
-10. Run: nix develop -c cargo test -p nom-core -- confirm all 154 tests pass
+### 1. compute_portion_macros return type (~line 129-151)
+- Change return type from `(f64, f64, f64, f64, f64)` to `NutrientValues`
+- Replace tuple literal construction with struct: `NutrientValues { calories: snapshot_nutrients.calories * factor, protein_g: ..., carbs_g: ..., fat_g: ..., fiber_g: ... }`
+
+### 2. compute_totals signature (~line 155-178)
+- Change `portions: &[(f64, f64, f64, f64, f64)]` to `portions: &[NutrientValues]`
+- Replace positional destructure loop `for (cal, prot, carb, fat, fiber) in portions` with `for n in portions` and accumulate via named fields (`n.calories`, `n.protein_g`, etc.)
+
+### 3. Remove MacroTuple type alias (~line 356-357)
+- Delete the `type MacroTuple = (f64, f64, f64, f64, f64);` line and its doc comment
+- This alias provided zero value since it was just a name around the same bare tuple
+
+### 4. resolve_portions (~lines 371-420)
+- Change return type from `Result<(Vec<MacroTuple>, Vec<SnapshotTuple>), ErrorData>` to `Result<(Vec<NutrientValues>, Vec<SnapshotTuple>), ErrorData>`
+- Change `let mut all_macros: Vec<MacroTuple>` to `let mut all_macros: Vec<NutrientValues>`
+- The `compute_portion_macros()` call already assigns to `macros` variable; no destructure change needed since it now returns NutrientValues directly
+
+### 5. build_meal_summary (~line 582)
+- Replace `let (cal, prot, carb, fat, fiber) = compute_portion_macros(...)` with `let macros = compute_portion_macros(...)`
+- Use `macros.calories`, `macros.protein_g`, `macros.carbs_g`, `macros.fat_g`, `macros.fiber_g` when constructing PortionSummary
+
+### 6. UpdateMeal adjustment-only recompute (~line 1005)
+- Change `let mut all_macros: Vec<(f64, f64, f64, f64, f64)>` to `let mut all_macros: Vec<NutrientValues>`
+- The `all_macros.push(compute_portion_macros(...))` at ~line 1063 needs no code change beyond the type flowing through
+
+### 7. Unit tests (~lines 1528-1573)
+- `test_compute_portion_macros_grams_mode`: replace `let (cal, prot, carb, fat, fiber) = compute_portion_macros(...)` with `let result = compute_portion_macros(...)` and access `result.calories`, `result.protein_g`, etc.
+- `test_compute_portion_macros_servings_mode`: same pattern
+- `test_compute_portion_macros_servings_no_serving_size`: same pattern (only checks calories)
+- `test_compute_totals_basic`: change test data from tuple literals `(100.0, 10.0, 15.0, 5.0, 2.0)` to `NutrientValues { calories: 100.0, protein_g: 10.0, ... }`
+- `test_compute_totals_with_adjustment`: same pattern for the single portion
+
+### 8. Verification steps
+- `nix develop -c cargo fmt -p nom-core`
+- `nix develop -c cargo clippy --workspace --all-targets` — confirm clean
+- `nix develop -c cargo test -p nom-core` — confirm all 154 tests pass
 <!-- SECTION:PLAN:END -->
