@@ -12,6 +12,7 @@ dependencies:
   - TASK-2.7
   - TASK-2.10
   - TASK-2.13
+  - TASK-9
 type: feature
 ordinal: 33000
 ---
