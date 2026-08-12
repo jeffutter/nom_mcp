@@ -22,6 +22,26 @@ impl Connection {
         Self::open_at(&db_path()).await
     }
 
+    /// Open a database safely, probing for an advisory lock first.
+    ///
+    /// Before opening the database, checks if another process holds a write
+    /// lock using POSIX `fcntl` advisory locks (same mechanism Turso uses).
+    /// If the lock is held, returns a `Conflict` error instead of risking
+    /// silent WAL corruption.
+    ///
+    /// Tests should use [`Connection::open_at`] directly to bypass the probe.
+    pub async fn open_safe(path: &Path) -> Result<Self, StorageError> {
+        // Probe the lock BEFORE constructing a Turso database
+        if super::lock_probe::probe_db_lock(path).map_err(|e| {
+            StorageError::Io(format!("failed to probe database lock: {e}"))
+        })? {
+            return Err(StorageError::Database(
+                "database file is locked by another process".to_string(),
+            ));
+        }
+        Self::open_at(path).await
+    }
+
     /// Open a database at an arbitrary path (used by tests).
     pub async fn open_at(path: &Path) -> Result<Self, StorageError> {
         // Ensure parent directory exists

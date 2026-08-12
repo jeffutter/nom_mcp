@@ -1941,6 +1941,7 @@ dependencies = [
  "config",
  "http",
  "iana-time-zone",
+ "libc",
  "reqwest",
  "rmcp",
  "schemars",

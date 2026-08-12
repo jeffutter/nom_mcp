@@ -4,6 +4,7 @@
 //! the geni pattern (raw SQL + version tracking), and WAL checkpoint invariant.
 
 pub mod connection;
+pub mod lock_probe;
 pub mod migration;
 
 #[cfg(test)]
