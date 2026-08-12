@@ -8,6 +8,6 @@ pub mod lock_probe;
 pub mod migration;
 
 #[cfg(test)]
-mod test;
+pub mod test;
 
 pub use connection::{Connection, StorageError};

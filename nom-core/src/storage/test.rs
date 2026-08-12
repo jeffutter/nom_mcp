@@ -1,7 +1,26 @@
 //! Integration tests for storage module — run against temp-file databases.
 
 use super::{Connection, StorageError};
+use std::path::PathBuf;
 use tempfile::TempDir;
+
+/// Reusable temp database fixture. Keeps the TempDir alive until dropped.
+pub struct TempDb {
+    pub path: PathBuf,
+    _dir: TempDir,
+}
+
+impl TempDb {
+    pub async fn new() -> Self {
+        let dir = TempDir::with_prefix("nom_test").unwrap();
+        let path = dir.path().join("test.db");
+        // Open to trigger migrations, then drop the connection
+        let _conn = Connection::open_at(&path)
+            .await
+            .expect("failed to open temp db");
+        Self { path, _dir: dir }
+    }
+}
 
 /// Helper: create a temporary directory and open a connection at a path inside it.
 async fn open_temp_db() -> Result<(Connection, TempDir), StorageError> {

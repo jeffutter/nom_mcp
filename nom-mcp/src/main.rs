@@ -5,9 +5,11 @@
 
 use std::sync::Arc;
 
+use nom_core::client::{off::OffClient, usda::FdcClient};
 use nom_core::clock::Clock;
 use nom_core::config::{AppConfig, db_path};
 use nom_core::error::{ErrorData, cli_exit};
+use nom_core::food::{CreateCustomFood, SearchFood};
 use nom_core::operation::OperationRegistry;
 use nom_core::storage::lock_probe;
 
@@ -21,7 +23,7 @@ fn main() {
 
 /// Execute an operation from command-line arguments.
 /// Returns structured JSON on success, or unified ErrorData on failure.
-pub fn execute_from_args(_args: &[String]) -> Result<serde_json::Value, ErrorData> {
+pub fn execute_from_args(args: &[String]) -> Result<serde_json::Value, ErrorData> {
     // Load config
     let config = AppConfig::load()
         .map_err(|e| ErrorData::storage_failure(format!("failed to load config: {e}")))?;
@@ -36,13 +38,47 @@ pub fn execute_from_args(_args: &[String]) -> Result<serde_json::Value, ErrorDat
 
     let clock = Arc::new(Clock::new(&config)?);
 
+    // Build clients
+    let off_client = Arc::new(
+        OffClient::new("https://world.openfoodfacts.org", &config.off_user_agent)
+            .map_err(|e| ErrorData::storage_failure(format!("OFF client init failed: {e}")))?,
+    );
+
+    // USDA FDC client is optional — validated lazily when search_food runs
+    let fdc_client: Option<Arc<FdcClient>> = config
+        .usda_api_key
+        .as_ref()
+        .map(|key| {
+            FdcClient::new("https://api.nal.usda.gov/fdc", key.get())
+                .map(Arc::new)
+                .map_err(|e| ErrorData::storage_failure(format!("FDC client init failed: {e}")))
+        })
+        .transpose()?;
+
     // Build registry with Clock — all surfaces share this Clock
-    let _registry = OperationRegistry::new(clock.clone());
+    let mut registry = OperationRegistry::new(clock.clone());
 
-    // TODO: register domain operations
-    // Future tasks will populate the registry here
+    // Register food operations
+    registry.register(Arc::new(SearchFood::new(off_client, fdc_client)));
+    registry.register(Arc::new(CreateCustomFood::new()));
 
-    // For now, return a placeholder so the error path is wired correctly.
-    let today = clock.today();
-    Ok(serde_json::json!({ "status": "ok", "today": Clock::format_date(today) }))
+    // Dispatch based on CLI subcommand
+    if args.len() < 2 {
+        return Err(ErrorData::validation(
+            "command",
+            "no subcommand provided",
+        ));
+    }
+
+    let op_name = &args[1];
+    let op_args = serde_json::json!({}); // TODO: parse args[2..] into JSON
+
+    let Some(op) = registry.get(op_name) else {
+        return Err(ErrorData::not_found());
+    };
+
+    // Run the async operation in a tokio runtime
+    tokio::runtime::Runtime::new()
+        .map_err(|e| ErrorData::storage_failure(format!("failed to create runtime: {e}")))?
+        .block_on(op.execute_json(Arc::new(op_args)))
 }

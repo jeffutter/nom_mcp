@@ -21,6 +21,7 @@ pub mod client;
 pub mod clock;
 pub mod config;
 pub mod error;
+pub mod food;
 pub mod logging;
 pub mod operation;
 pub mod storage;
