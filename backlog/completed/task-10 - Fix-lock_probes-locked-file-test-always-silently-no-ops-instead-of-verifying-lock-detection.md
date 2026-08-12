@@ -80,4 +80,12 @@ Also run full suite: \`nix develop -c cargo test -p nom-core\`
 
 <!-- SECTION:NOTES:BEGIN -->
 Replaced broken rustc compile-from-string approach with dedicated lock_holder binary target. The old test compiled ad-hoc Rust source without libc linking (always failed silently). New approach: spawned lock_holder binary (properly linked by Cargo) holds an exclusive write lock via fcntl/F_SETLKW; parent verifies probe_db_lock detects it (is_locked=true), kills child, then verifies lock release (is_locked=false). All 132 tests pass.
+
+Fixup applied post-review: lock_probe.rs and lock_holder.rs failed cargo fmt --all --check as committed, which would fail the project's CI fmt gate. Ran rustfmt on both files (formatting only, no logic change).
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Replaced silently-failing test_probe_locked_file with working lock detection test. Created dedicated lock_holder binary (nom-core/src/lock_holder.rs) that acquires an exclusive fcntl write lock and sleeps. Test spawns this binary, verifies probe_db_lock detects the held lock (true), kills child, then verifies release (false). All 4 acceptance criteria verified: no rustc dependency, loud failures on setup problems, assertions actually execute, full nom-core suite passes (132 tests).
+<!-- SECTION:FINAL_SUMMARY:END -->

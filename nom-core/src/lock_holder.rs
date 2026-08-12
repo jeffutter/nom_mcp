@@ -25,7 +25,6 @@ fn hold_lock(path: &Path) {
 }
 
 fn main() {
-    let path_str = std::env::var("NOM_HOLD_LOCK_PATH")
-        .expect("NOM_HOLD_LOCK_PATH must be set");
+    let path_str = std::env::var("NOM_HOLD_LOCK_PATH").expect("NOM_HOLD_LOCK_PATH must be set");
     hold_lock(Path::new(&path_str));
 }

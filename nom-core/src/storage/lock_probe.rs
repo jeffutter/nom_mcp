@@ -45,9 +45,8 @@ mod tests {
     /// Resolve the path to the `lock_holder` binary built by cargo.
     fn find_lock_holder() -> std::path::PathBuf {
         // Build the binary first (may already exist from previous runs)
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| {
-            panic!("CARGO_MANIFEST_DIR not set — run through cargo test")
-        });
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+            .unwrap_or_else(|_| panic!("CARGO_MANIFEST_DIR not set — run through cargo test"));
         let status = std::process::Command::new("cargo")
             .args(["build", "--bin", "lock_holder"])
             .current_dir(&manifest_dir)
@@ -128,10 +127,11 @@ mod tests {
         // Verify child is still running (it should be sleeping)
         match child.try_wait() {
             Ok(Some(status)) => panic!(
-                "child exited prematurely with status {:?} — lock setup failed", status
+                "child exited prematurely with status {:?} — lock setup failed",
+                status
             ),
             Err(e) => panic!("try_wait failed: {}", e),
-            Ok(None) => {}, // child still running, good
+            Ok(None) => {} // child still running, good
         }
 
         // Probe should detect the lock
