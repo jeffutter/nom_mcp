@@ -680,13 +680,7 @@ impl Operation for CreateCustomFood {
             fiber_g: convert_to_per_100g(req.nutrients.fiber_g, serving_size_g),
         };
 
-        let food_id = insert_custom_food(
-            &conn,
-            &req.name,
-            nutrients,
-            Some(serving_size_g),
-        )
-        .await?;
+        let food_id = insert_custom_food(&conn, &req.name, nutrients, Some(serving_size_g)).await?;
 
         Ok(serde_json::json!(FoodCandidate {
             food_id,

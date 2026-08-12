@@ -7,7 +7,7 @@ status: Done
 assignee:
   - '@ralph'
 created_date: '2026-08-12 05:29'
-updated_date: '2026-08-12 21:12'
+updated_date: '2026-08-12 21:35'
 labels:
   - review-followup
   - planned
@@ -570,6 +570,8 @@ Diff in /home/jeffutter/src/nom_mcp/nom-core/src/meal/mod.rs:1874:
 
 <!-- SECTION:NOTES:BEGIN -->
 Implemented NutrientValues struct with calories/protein_g/carbs_g/fat_g/fiber_g fields. Changed extract_off_macros() to return NutrientValues instead of a 5-tuple. Updated upsert_catalog_food (was 10 args, now 6) and insert_custom_food (was 8 args, now 4). Updated 3 call sites: search_barcode, search_free_text USDA branch, CreateCustomFood::execute_json. Updated 3 unit tests. All 153 tests pass; clippy no longer flags these two functions.
+
+Fixup applied post-review: committed insert_custom_food call in CreateCustomFood::execute_json (food/mod.rs) failed cargo fmt --check as landed (multi-line call that rustfmt collapses to one line). Ran cargo fmt to correct formatting; no logic change.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
