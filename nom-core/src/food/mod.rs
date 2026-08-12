@@ -575,6 +575,12 @@ pub struct CreateCustomFood {
     db_path: Option<std::path::PathBuf>,
 }
 
+impl Default for CreateCustomFood {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CreateCustomFood {
     pub fn new() -> Self {
         Self {

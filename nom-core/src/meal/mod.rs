@@ -268,11 +268,11 @@ async fn insert_meal(
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING id
     "#;
-    let adj_cal = adjustment.and_then(|a| a.calories).unwrap_or(f64::NAN);
-    let adj_prot = adjustment.and_then(|a| a.protein_g).unwrap_or(f64::NAN);
-    let adj_carb = adjustment.and_then(|a| a.carbs_g).unwrap_or(f64::NAN);
-    let adj_fat = adjustment.and_then(|a| a.fat_g).unwrap_or(f64::NAN);
-    let adj_fiber = adjustment.and_then(|a| a.fiber_g).unwrap_or(f64::NAN);
+    let adj_cal: Option<f64> = adjustment.and_then(|a| a.calories);
+    let adj_prot: Option<f64> = adjustment.and_then(|a| a.protein_g);
+    let adj_carb: Option<f64> = adjustment.and_then(|a| a.carbs_g);
+    let adj_fat: Option<f64> = adjustment.and_then(|a| a.fat_g);
+    let adj_fiber: Option<f64> = adjustment.and_then(|a| a.fiber_g);
 
     let mut stmt = conn
         .prepare(sql)
@@ -413,22 +413,21 @@ async fn build_meal_summary(conn: &Connection, meal_id: i64) -> Result<MealSumma
     };
 
     // Read nullable adjustments
-    let get_optional_f64 = |idx: usize| -> Result<Option<f64>, ErrorData> {
-        match meal_row
-            .get_value(idx)
-            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
-        {
-            turso::Value::Real(v) if !v.is_nan() => Ok(Some(v)),
-            turso::Value::Null => Ok(None),
-            _ => Ok(None),
-        }
-    };
-
-    let adj_cal = get_optional_f64(8)?;
-    let adj_prot = get_optional_f64(9)?;
-    let adj_carb = get_optional_f64(10)?;
-    let adj_fat = get_optional_f64(11)?;
-    let adj_fiber = get_optional_f64(12)?;
+    let adj_cal: Option<f64> = meal_row
+        .get(8)
+        .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+    let adj_prot: Option<f64> = meal_row
+        .get(9)
+        .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+    let adj_carb: Option<f64> = meal_row
+        .get(10)
+        .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+    let adj_fat: Option<f64> = meal_row
+        .get(11)
+        .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+    let adj_fiber: Option<f64> = meal_row
+        .get(12)
+        .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
 
     let adjustment = if adj_cal.is_some()
         || adj_prot.is_some()
@@ -875,11 +874,11 @@ impl Operation for UpdateMeal {
 
             // Update adjustment if provided
             if let Some(ref adj) = req.adjustment {
-                let adj_cal = adj.calories.unwrap_or(f64::NAN);
-                let adj_prot = adj.protein_g.unwrap_or(f64::NAN);
-                let adj_carb = adj.carbs_g.unwrap_or(f64::NAN);
-                let adj_fat = adj.fat_g.unwrap_or(f64::NAN);
-                let adj_fiber = adj.fiber_g.unwrap_or(f64::NAN);
+                let adj_cal: Option<f64> = adj.calories;
+                let adj_prot: Option<f64> = adj.protein_g;
+                let adj_carb: Option<f64> = adj.carbs_g;
+                let adj_fat: Option<f64> = adj.fat_g;
+                let adj_fiber: Option<f64> = adj.fiber_g;
                 conn.execute(
                     "UPDATE meals SET adjustment_calories = ?, adjustment_protein_g = ?, \
                      adjustment_carbs_g = ?, adjustment_fat_g = ?, adjustment_fiber_g = ? \
@@ -955,18 +954,11 @@ impl Operation for UpdateMeal {
                     if let Some(row) = rows.next().await
                         .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
                     {
-                        let get_opt = |idx: usize| -> Result<Option<f64>, ErrorData> {
-                            match row.get_value(idx)
-                                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))? {
-                                turso::Value::Real(v) if !v.is_nan() => Ok(Some(v)),
-                                _ => Ok(None),
-                            }
-                        };
-                        let c = get_opt(0)?;
-                        let p = get_opt(1)?;
-                        let cb = get_opt(2)?;
-                        let f = get_opt(3)?;
-                        let fi = get_opt(4)?;
+                        let c: Option<f64> = row.get(0).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+                        let p: Option<f64> = row.get(1).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+                        let cb: Option<f64> = row.get(2).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+                        let f: Option<f64> = row.get(3).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+                        let fi: Option<f64> = row.get(4).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
                         if c.is_some() || p.is_some() || cb.is_some() || f.is_some() || fi.is_some() {
                             Some(Adjustment { calories: c, protein_g: p, carbs_g: cb, fat_g: f, fiber_g: fi })
                         } else {
@@ -1068,6 +1060,12 @@ struct DeleteMealRequest {
 pub struct DeleteMeal {
     #[cfg(test)]
     db_path: Option<std::path::PathBuf>,
+}
+
+impl Default for DeleteMeal {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DeleteMeal {
@@ -1196,6 +1194,12 @@ struct SearchMealsRequest {
 pub struct SearchMeals {
     #[cfg(test)]
     db_path: Option<std::path::PathBuf>,
+}
+
+impl Default for SearchMeals {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SearchMeals {
@@ -1366,6 +1370,12 @@ struct GetMealsByDateRangeRequest {
 pub struct GetMealsByDateRange {
     #[cfg(test)]
     db_path: Option<std::path::PathBuf>,
+}
+
+impl Default for GetMealsByDateRange {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GetMealsByDateRange {

@@ -3,9 +3,11 @@ id: TASK-15
 title: >-
   Fix: replace f64::NAN sentinel for nullable meal adjustment columns with
   Option<f64>
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@ralph'
 created_date: '2026-08-12 20:21'
+updated_date: '2026-08-12 20:58'
 labels:
   - review-followup
 dependencies:
@@ -22,10 +24,10 @@ Found while reviewing TASK-2.14 (nom-core/src/meal/mod.rs:271-275, :878-882 writ
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 insert_meal's adjustment parameters and UpdateMeal's adjustment-update SQL bind Option<f64> directly (via the same pattern already used for snapshot_serving_size_g), not f64::NAN sentinels
-- [ ] #2 The get_optional_f64 NaN-filtering closure is removed from both of its current call sites (around meal/mod.rs:416 and :888) since it is no longer needed once nulls are stored as real SQL NULLs
-- [ ] #3 Existing tests covering adjustment-present and adjustment-absent meals (e.g. test_update_meal_partial_patch_adjustment_only and log_meal tests with/without adjustment) still pass without modification to their assertions, proving behavior is unchanged from the caller's perspective
-- [ ] #4 nix develop -c cargo test -p nom-core passes
+- [x] #1 insert_meal's adjustment parameters and UpdateMeal's adjustment-update SQL bind Option<f64> directly (via the same pattern already used for snapshot_serving_size_g), not f64::NAN sentinels
+- [x] #2 The get_optional_f64 NaN-filtering closure is removed from both of its current call sites (around meal/mod.rs:416 and :888) since it is no longer needed once nulls are stored as real SQL NULLs
+- [x] #3 Existing tests covering adjustment-present and adjustment-absent meals (e.g. test_update_meal_partial_patch_adjustment_only and log_meal tests with/without adjustment) still pass without modification to their assertions, proving behavior is unchanged from the caller's perspective
+- [x] #4 nix develop -c cargo test -p nom-core passes
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -39,3 +41,15 @@ SETUP (read first): This is a Rust+WebAssembly core (nom-core, nom-mcp) with SQL
 4. Delete the now-unused get_optional_f64 closures entirely (do not leave them as dead code) once both call sites are converted.
 5. Run: nix develop -c cargo test -p nom-core -- meal:: --nocapture and confirm all meal tests pass unchanged, especially test_update_meal_partial_patch_adjustment_only and any log_meal test with adjustment present/absent, then run the full suite: nix develop -c cargo test -p nom-core
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+All changes were implemented during TASK-2.14 review followup. Verified by running full test suite: 153 tests pass (21 meal-specific + 132 others). No assertion modifications needed — behavior unchanged from caller perspective.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Replaced f64::NAN sentinels with Option<f64> for nullable meal adjustment columns across 4 sites: insert_meal write path, build_meal_summary read path, UpdateMeal adjustment update path, and UpdateMeal portion replacement recompute path. Removed both get_optional_f64/get_opt closures (NaN-filtering workarounds) since real SQL NULLs are now stored and read directly via turso's row.get::<Option<f64>>(). All 153 nom-core tests pass unchanged.
+<!-- SECTION:FINAL_SUMMARY:END -->
