@@ -136,6 +136,10 @@ Each operation opens its own Connection, runs in an explicit BEGIN/COMMIT transa
 
 <!-- SECTION:NOTES:BEGIN -->
 Implemented 5 meal operations in nom-core/src/meal/mod.rs: LogMeal (with snapshot capture at insert time), UpdateMeal (full portion replacement semantics), DeleteMeal (cascade delete with NotFound check), SearchMeals (keyword match on food names, recency-ordered), GetMealsByDateRange (covers today/by-date/by-range). All operations follow the food/mod.rs pattern with shared types, DB helpers, and Operation trait implementations. 10 integration tests + 6 unit tests verify correctness including snapshot semantics.
+
+Fixup applied post-review: DeleteMeal ran its two cascade DELETE statements with no transaction, contradicting the ticket's own stated transaction pattern — wrapped in BEGIN/COMMIT/ROLLBACK matching LogMeal/UpdateMeal.
+
+Fixup applied post-review: meal/mod.rs as committed failed cargo fmt --all --check (the file was never run through rustfmt), which would fail the project's CI fmt gate. Ran rustfmt on the file (formatting only, no logic change), as a separate fixup commit from the DeleteMeal transaction fix.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

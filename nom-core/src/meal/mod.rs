@@ -1071,19 +1071,41 @@ impl Operation for DeleteMeal {
             }
         }
 
+        // Begin transaction
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| ErrorData::storage_failure(format!("transaction begin failed: {e}")))?;
+
         // Cascade delete portions, then meal
-        conn.execute("DELETE FROM portions WHERE meal_id = ?", (req.meal_id,))
-            .await
-            .map_err(|e| ErrorData::storage_failure(format!("delete portions failed: {e}")))?;
+        let result = (async {
+            conn.execute("DELETE FROM portions WHERE meal_id = ?", (req.meal_id,))
+                .await
+                .map_err(|e| ErrorData::storage_failure(format!("delete portions failed: {e}")))?;
 
-        conn.execute("DELETE FROM meals WHERE id = ?", (req.meal_id,))
-            .await
-            .map_err(|e| ErrorData::storage_failure(format!("delete meal failed: {e}")))?;
+            conn.execute("DELETE FROM meals WHERE id = ?", (req.meal_id,))
+                .await
+                .map_err(|e| ErrorData::storage_failure(format!("delete meal failed: {e}")))?;
 
-        Ok(serde_json::json!({
-            "deleted": true,
-            "meal_id": req.meal_id,
-        }))
+            Ok(())
+        })
+        .await;
+
+        match result {
+            Ok(()) => {
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| ErrorData::storage_failure(format!("commit failed: {e}")))?;
+
+                Ok(serde_json::json!({
+                    "deleted": true,
+                    "meal_id": req.meal_id,
+                }))
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(e)
+            }
+        }
     }
 }
 
