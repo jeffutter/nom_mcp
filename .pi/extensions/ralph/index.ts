@@ -23,11 +23,17 @@
  * and every one of this user's ~15 globally-loaded extensions reproduces it
  * in isolation (roughly 1-in-2 to 1-in-3 runs each) — pointing at something
  * systemic in extension load/teardown rather than one buggy package, with
- * risk compounding across however many are loaded. None of our worker steps
- * need any of them except the research step's web search, which explicitly
- * re-enables just `pi-web-access` via `-e` (`--no-extensions` only disables
- * auto-discovery; explicit `-e` paths still load). Skills are unaffected —
- * that's a separate `--no-skills` flag we don't touch.
+ * risk compounding across however many are loaded. Two exceptions re-enable a
+ * specific extension via `-e` (`--no-extensions` only disables auto-discovery;
+ * explicit `-e` paths still load): the research step's web search needs
+ * `pi-web-access`, and the execute/research/plan/review steps load
+ * `pi-intercom` so they can ping the orchestrating session with progress
+ * updates (see `intercomStatusGuidance`). Both knowingly pay the hang-risk tax
+ * above — accepted because the existing `execCapture` watchdog already turns
+ * a hung subprocess into "runs its full timeout instead of returning
+ * promptly," not a stuck loop, which was judged an acceptable price for live
+ * progress visibility. Skills are unaffected — that's a separate `--no-skills`
+ * flag we don't touch.
  */
 
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -39,7 +45,13 @@ import type {
   ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@earendil-works/pi-ai";
-import { Box, Key, matchesKey, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import {
+  Box,
+  Key,
+  matchesKey,
+  Text,
+  truncateToWidth,
+} from "@earendil-works/pi-tui";
 
 // --- Types & constants ---------------------------------------------------
 
@@ -53,13 +65,20 @@ const PI_WEB_ACCESS_EXTENSION = join(
   ".pi/agent/npm/node_modules/pi-web-access/index.ts",
 );
 
+/** Path assumption: wherever this user's `pi-intercom` package currently
+ * resolves. May need updating if `pi update` changes the install layout. */
+const PI_INTERCOM_EXTENSION = join(
+  homedir(),
+  ".pi/agent/npm/node_modules/pi-intercom/index.ts",
+);
+
 const DEFAULT_ITERATIONS = 16;
 const DEFAULT_REVIEW_EVERY = 3;
 
 const TRIAGE_TIMEOUT_MS = 5 * 60_000;
 const RESEARCH_TIMEOUT_MS = 15 * 60_000;
 const PLAN_TIMEOUT_MS = 20 * 60_000;
-const EXECUTE_TIMEOUT_MS = 30 * 60_000;
+const EXECUTE_TIMEOUT_MS = 40 * 60_000;
 const CHOOSE_TIMEOUT_MS = 10 * 60_000;
 const REVIEW_TIMEOUT_MIN = 50;
 const REVIEW_TIMEOUT_MS = REVIEW_TIMEOUT_MIN * 60_000;
@@ -116,6 +135,23 @@ type RalphState = {
    * won't surface, since backlog-execute correctly reports success for documenting the blocker
    * and reverting status. */
   repeatedChoiceStreak?: { ticketId: string; count: number };
+  /** Cached triage verdict / research output for the ticket currently being planned. A doPlan
+   * retry (triggered by the outer loop re-finding the same still-"Needs Plan" ticket after a
+   * failure) reuses this instead of redoing triage and research from scratch — only the step
+   * that actually failed re-runs. Cleared once the ticket's plan succeeds (or trivial path
+   * completes) or a different ticket starts planning. */
+  planCache?: {
+    ticketId: string;
+    triage?: "TRIVIAL" | "NORMAL";
+    researchOutput?: string;
+  };
+  /** This session's intercom id, captured once at `/ralph` start so headless steps can address
+   * progress pings back here — see `intercomStatusGuidance`. */
+  mainSessionId: string;
+  /** The herdr pane this loop is running in, captured once at `/ralph` start from
+   * `HERDR_PANE_ID` so the review step can split a known pane deterministically instead of
+   * having each review call rediscover "the current pane" itself via `herdr pane list`. */
+  mainPaneId: string;
 };
 
 /** Records outcome `ok` under `key`; returns true once the streak hits the cap. */
@@ -142,7 +178,12 @@ let activeState: RalphState | null = null;
 
 // --- State persistence -----------------------------------------------------
 
-function createState(iterations: number, reviewEvery: number): RalphState {
+function createState(
+  iterations: number,
+  reviewEvery: number,
+  mainSessionId: string,
+  mainPaneId: string,
+): RalphState {
   return {
     status: "running",
     iterations,
@@ -157,6 +198,9 @@ function createState(iterations: number, reviewEvery: number): RalphState {
     history: [],
     failureStreak: undefined,
     repeatedChoiceStreak: undefined,
+    planCache: undefined,
+    mainSessionId,
+    mainPaneId,
   };
 }
 
@@ -297,10 +341,15 @@ async function listUnblockedByStatus(
   cwd: string,
   status: string,
 ): Promise<Ticket[]> {
-  const { stdout } = await execCapture(pi, "./backlog/unblocked-todo.sh", [status], {
-    cwd,
-    timeout: 30_000,
-  });
+  const { stdout } = await execCapture(
+    pi,
+    "./backlog/unblocked-todo.sh",
+    [status],
+    {
+      cwd,
+      timeout: 30_000,
+    },
+  );
   return parseUnblockedList(stdout);
 }
 
@@ -324,7 +373,11 @@ async function promoteUnblockedBlockedTickets(
   cwd: string,
   state: RalphState,
 ): Promise<Ticket[]> {
-  setCurrentStep(ctx, state, "checking Blocked tickets for satisfied dependencies");
+  setCurrentStep(
+    ctx,
+    state,
+    "checking Blocked tickets for satisfied dependencies",
+  );
   const promotable = await listUnblockedByStatus(pi, cwd, "Blocked");
   const promoted: Ticket[] = [];
   for (const ticket of promotable) {
@@ -344,11 +397,19 @@ async function promoteUnblockedBlockedTickets(
 
 /** All known ticket IDs, across every status. Used to detect new tickets filed by a review
  * step via a before/after diff, rather than parsing the review agent's free-text summary. */
-async function listAllTicketIds(pi: ExtensionAPI, cwd: string): Promise<Set<string>> {
-  const { stdout } = await execCapture(pi, "backlog", ["task", "list", "--plain"], {
-    cwd,
-    timeout: 15_000,
-  });
+async function listAllTicketIds(
+  pi: ExtensionAPI,
+  cwd: string,
+): Promise<Set<string>> {
+  const { stdout } = await execCapture(
+    pi,
+    "backlog",
+    ["task", "list", "--plain"],
+    {
+      cwd,
+      timeout: 15_000,
+    },
+  );
   return new Set(parsePlainTaskList(stdout).map((t) => t.id));
 }
 
@@ -415,13 +476,38 @@ function tailSummary(output: string, maxLen = 240): string {
   return collapsed.length > maxLen ? `…${collapsed.slice(-maxLen)}` : collapsed;
 }
 
+/**
+ * Progress-ping instructions appended to the long-running headless prompts (execute, research,
+ * plan, review) so the subagent narrates back to the orchestrating session via pi-intercom
+ * instead of running silently until it finishes or hits its timeout. Pair with `extensions:
+ * [PI_INTERCOM_EXTENSION]` on the same `runHeadless` call — loading the extension without this
+ * guidance leaves the tool available but unused, and the guidance without the extension gives
+ * the model a tool call that doesn't exist.
+ */
+function intercomStatusGuidance(mainSessionId: string): string {
+  return dedent`
+    Progress updates: every few minutes, or after finishing each meaningfully distinct sub-step
+    (not more often than that), send a one-line status ping back to the orchestrating session via
+    the intercom tool. Use \`send\`, never \`ask\` — nobody is waiting on a reply:
+    intercom({ action: "send", to: "${mainSessionId}", message: "<one sentence: what you just
+    finished or are doing now>" })
+    Skip this entirely if the intercom tool isn't available — it's a courtesy update, not part of
+    the task itself.
+  `;
+}
+
 async function runHeadless(
   pi: ExtensionAPI,
   cwd: string,
   prompt: string,
-  opts: { timeout: number; model?: string; extensions?: string[]; noSkills?: boolean },
+  opts: {
+    timeout: number;
+    model?: string;
+    extensions?: string[];
+    noSkills?: boolean;
+  },
 ): Promise<{ ok: boolean; killed: boolean; output: string }> {
-  const args = ["-p", "--no-session", "--no-extensions"];
+  const args = ["-p", "--no-extensions"];
   // Steps that only read a ticket and make a judgment call (triage, choose) don't need any
   // project or global skill — but headless calls inherit the user's full global skill set by
   // default, and a skill can trigger on trigger words in the prompt that have nothing to do
@@ -489,7 +575,10 @@ function setCurrentStep(
 
 /** `git rev-parse HEAD`, or null if the command itself failed (not "no commits yet" — this
  * repo always has history; a null here means something is wrong with git itself). */
-async function currentHeadSha(pi: ExtensionAPI, cwd: string): Promise<string | null> {
+async function currentHeadSha(
+  pi: ExtensionAPI,
+  cwd: string,
+): Promise<string | null> {
   const { ok, stdout } = await execCapture(pi, "git", ["rev-parse", "HEAD"], {
     cwd,
     timeout: 10_000,
@@ -516,7 +605,8 @@ async function autosquashFixups(
   cwd: string,
   runStartSha: string | null,
 ): Promise<{ ok: boolean; summary: string }> {
-  if (!runStartSha) return { ok: true, summary: "skipped (no run-start SHA recorded)" };
+  if (!runStartSha)
+    return { ok: true, summary: "skipped (no run-start SHA recorded)" };
 
   const { stdout: log } = await execCapture(
     pi,
@@ -532,7 +622,11 @@ async function autosquashFixups(
     ["-c", "sequence.editor=true", "rebase", "--autosquash", "-i", runStartSha],
     { cwd, timeout: 60_000 },
   );
-  if (rebase.ok) return { ok: true, summary: "folded pending fixup commit(s) into their targets" };
+  if (rebase.ok)
+    return {
+      ok: true,
+      summary: "folded pending fixup commit(s) into their targets",
+    };
 
   await execCapture(pi, "git", ["rebase", "--abort"], { cwd, timeout: 15_000 });
   return {
@@ -550,9 +644,19 @@ async function doExecute(
 ): Promise<boolean> {
   setCurrentStep(ctx, state, `executing ${ticket.id}`, EXECUTE_TIMEOUT_MS);
   const shaBefore = await currentHeadSha(pi, cwd);
-  const result = await runHeadless(pi, cwd, `/backlog-execute ${ticket.id}`, {
-    timeout: EXECUTE_TIMEOUT_MS,
-  });
+  const result = await runHeadless(
+    pi,
+    cwd,
+    dedent`
+      /backlog-execute ${ticket.id}
+
+      ${intercomStatusGuidance(state.mainSessionId)}
+    `,
+    {
+      timeout: EXECUTE_TIMEOUT_MS,
+      extensions: [PI_INTERCOM_EXTENSION],
+    },
+  );
 
   // A subprocess reporting success — even a Final Summary claiming every AC is met — isn't
   // proof anything actually landed. Confirmed live: a first attempt hit EXECUTE_TIMEOUT_MS and
@@ -562,7 +666,8 @@ async function doExecute(
   // a commit. HEAD not moving is unambiguous, so a "successful" run that leaves it where it
   // started is treated as a failure here regardless of what the subprocess claimed.
   const shaAfter = result.ok ? await currentHeadSha(pi, cwd) : shaBefore;
-  const committed = shaBefore !== null && shaAfter !== null && shaBefore !== shaAfter;
+  const committed =
+    shaBefore !== null && shaAfter !== null && shaBefore !== shaAfter;
   const ok = result.ok && committed;
 
   if (ok) state.executedSinceReview += 1;
@@ -623,10 +728,33 @@ async function doPlan(
   state: RalphState,
   ticket: Ticket,
 ): Promise<boolean> {
+  // A retry (the outer loop re-finding this same still-"Needs Plan" ticket after doPlan
+  // returned false) reuses whatever this cache already has for it instead of redoing that
+  // work — only the step that actually failed last time re-runs.
+  const cached =
+    state.planCache?.ticketId === ticket.id ? state.planCache : undefined;
+
   // Bypasses /backlog-planner's own prerequisite check (unplanned child tickets block
   // planning) and leaves no Implementation Plan on the ticket — accepted tradeoff for
   // skipping both steps outright on genuinely trivial work; see classifyTrivial above.
-  if (await classifyTrivial(pi, ctx, cwd, state, ticket)) {
+  let trivial: boolean;
+  if (cached?.triage) {
+    trivial = cached.triage === "TRIVIAL";
+    await recordHistory(cwd, state, {
+      kind: "plan",
+      ticket: ticket.id,
+      outcome: "ok",
+      summary: `triage: ${cached.triage} (reused from a prior attempt this run)`,
+    });
+  } else {
+    trivial = await classifyTrivial(pi, ctx, cwd, state, ticket);
+    state.planCache = {
+      ticketId: ticket.id,
+      triage: trivial ? "TRIVIAL" : "NORMAL",
+    };
+  }
+
+  if (trivial) {
     setCurrentStep(ctx, state, `marking ${ticket.id} Dev Ready (trivial)`);
     const ok = await setTicketStatus(pi, cwd, ticket.id, "Dev Ready");
     await recordHistory(cwd, state, {
@@ -637,27 +765,47 @@ async function doPlan(
         ? "trivial — skipped research/planning, marked Dev Ready directly"
         : "trivial — failed to mark Dev Ready",
     });
+    if (ok) state.planCache = undefined;
     return ok;
   }
 
-  setCurrentStep(ctx, state, `researching ${ticket.id}`, RESEARCH_TIMEOUT_MS);
-  const researchPrompt = dedent`
-    Research context to inform planning ticket ${ticket.id} ("${ticket.title}") in this repo.
-    Run \`backlog task ${ticket.id} --plain\` first to see the full ticket, then search the web for
-    relevant prior art, library documentation, or best practices that would help write a thorough
-    implementation plan. Return a concise research summary (bullet points), not a plan.
-  `;
-  const research = await runHeadless(pi, cwd, researchPrompt, {
-    timeout: RESEARCH_TIMEOUT_MS,
-    model: "research",
-    extensions: [PI_WEB_ACCESS_EXTENSION],
-  });
-  await recordHistory(cwd, state, {
-    kind: "plan",
-    ticket: ticket.id,
-    outcome: research.ok ? "ok" : "failed",
-    summary: `research: ${summarize(research, 120)}`,
-  });
+  let researchOutput: string;
+  if (cached?.researchOutput !== undefined) {
+    researchOutput = cached.researchOutput;
+    await recordHistory(cwd, state, {
+      kind: "plan",
+      ticket: ticket.id,
+      outcome: "ok",
+      summary: "research: reused from a prior attempt this run",
+    });
+  } else {
+    setCurrentStep(ctx, state, `researching ${ticket.id}`, RESEARCH_TIMEOUT_MS);
+    const researchPrompt = dedent`
+      Research context to inform planning ticket ${ticket.id} ("${ticket.title}") in this repo.
+      Run \`backlog task ${ticket.id} --plain\` first to see the full ticket, then search the web for
+      relevant prior art, library documentation, or best practices that would help write a thorough
+      implementation plan. Return a concise research summary (bullet points), not a plan.
+
+      ${intercomStatusGuidance(state.mainSessionId)}
+    `;
+    const research = await runHeadless(pi, cwd, researchPrompt, {
+      timeout: RESEARCH_TIMEOUT_MS,
+      model: "research",
+      extensions: [PI_WEB_ACCESS_EXTENSION, PI_INTERCOM_EXTENSION],
+    });
+    await recordHistory(cwd, state, {
+      kind: "plan",
+      ticket: ticket.id,
+      outcome: research.ok ? "ok" : "failed",
+      summary: `research: ${summarize(research, 120)}`,
+    });
+    researchOutput = research.output;
+    state.planCache = {
+      ticketId: ticket.id,
+      triage: "NORMAL",
+      researchOutput,
+    };
+  }
 
   setCurrentStep(ctx, state, `planning ${ticket.id}`, PLAN_TIMEOUT_MS);
   const planPrompt = dedent`
@@ -666,16 +814,19 @@ async function doPlan(
     Research gathered before planning (best-effort — the research step may have been cut short by a
     timeout partway through, or its output may just be an unrelated startup warning with no real
     content; use it if it's useful, ignore it and rely on repo context otherwise):
-    ${research.output.trim() || "(no output was produced)"}
+    ${researchOutput.trim() || "(no output was produced)"}
 
     After planning completes (the ticket has a plan and, if applicable, is labeled planned), set its
     status to Dev Ready: \`backlog task edit ${ticket.id} -s "Dev Ready"\`. If /backlog-planner instead
     exited early because it found unplanned child tickets, leave the status as-is and explain why in
     your final message.
+
+    ${intercomStatusGuidance(state.mainSessionId)}
   `;
   const plan = await runHeadless(pi, cwd, planPrompt, {
     timeout: PLAN_TIMEOUT_MS,
     model: "planning",
+    extensions: [PI_INTERCOM_EXTENSION],
   });
   await recordHistory(cwd, state, {
     kind: "plan",
@@ -683,6 +834,7 @@ async function doPlan(
     outcome: plan.ok ? "ok" : "failed",
     summary: summarize(plan),
   });
+  if (plan.ok) state.planCache = undefined;
   return plan.ok;
 }
 
@@ -766,26 +918,25 @@ async function doReview(
   );
   const ticketsBefore = await listAllTicketIds(pi, cwd);
   const prompt = dedent`
-    You are the review checkpoint for pi's autonomous backlog loop. Use the herdr CLI (you are already
-    running inside a herdr-managed pane) to have a fresh claude subagent audit the last ${n} completed
-    ticket(s):
+    You are the review checkpoint for pi's autonomous backlog loop. Use the herdr CLI to have a
+    fresh claude subagent audit the last ${n} completed ticket(s):
 
-    1. Split the current pane to open a new one for the review agent
-       (e.g. \`herdr pane split <this-pane-id> --direction right --no-focus\`);
-       find <this-pane-id> via \`herdr pane list\`.
+    1. Split off a new pane for the review agent from pane \`${state.mainPaneId}\` (the pane this
+       loop is running in — use this id directly, don't look it up):
+       \`herdr pane split ${state.mainPaneId} --direction right --no-focus\`.
     2. Change to pi's working directory in the new pane, then launch the review agent there with
        auto-approved permissions, so it sees the same repo checkout pi is running in. Quote the whole
        \`claude\` invocation as a single argument to \`pane run\` so its double-quoted prompt survives
        intact — e.g.:
        \`herdr pane run <new-pane-id> "cd '${cwd}'"\`
-       \`herdr pane run <new-pane-id> 'claude --permission-mode auto "Run the review-pi-work skill for the last ${n} tickets"'\`
+       \`herdr pane run <new-pane-id> 'claude --permission-mode auto "Run the /review-pi-work skill for the last ${n} tickets"'\`
     3. Wait for that pane's agent to finish with a single blocking call — do NOT poll
        \`herdr pane list\` in a sleep loop, that wastes your own turns waiting on a subagent that
        hasn't moved. Wait for \`idle\`, not \`done\`: \`claude --permission-mode auto "<prompt>"\`
        stays resident afterward waiting for more input rather than exiting, and (especially once the
        pane is focused) it settles at \`idle\` — \`done\` specifically means "finished but nobody's
        looked yet," which this pane won't satisfy.
-       \`herdr wait agent-status <new-pane-id> --status idle --timeout ${REVIEW_TIMEOUT_MS}\`
+       \`herdr agent wait <new-pane-id> --until idle --timeout ${REVIEW_TIMEOUT_MS}\`
        (timeout is in milliseconds — ${REVIEW_TIMEOUT_MIN} minutes). A nonzero exit means it timed out;
        treat that the same as a failed review and continue to steps 4-5 anyway.
     4. Read its final output (\`herdr pane read <new-pane-id> --source recent --lines 400\`) and summarize
@@ -797,10 +948,13 @@ async function doReview(
     what happened above (including if you couldn't close the pane yourself), end your final message with a
     line containing exactly \`REVIEW_PANE_ID: <new-pane-id>\` (the id from step 1) so the caller can verify
     the pane is gone.
+
+    ${intercomStatusGuidance(state.mainSessionId)}
   `;
   const result = await runHeadless(pi, cwd, prompt, {
     timeout: REVIEW_TIMEOUT_MS,
     noSkills: true,
+    extensions: [PI_INTERCOM_EXTENSION],
   });
 
   // Don't trust the model to have actually run step 5 — close the pane ourselves as a
@@ -815,11 +969,14 @@ async function doReview(
       cwd,
       timeout: 10_000,
     });
-    if (closed.ok) cleanupNote = ` [cleanup: pane ${paneId} was still open, closed it]`;
+    if (closed.ok)
+      cleanupNote = ` [cleanup: pane ${paneId} was still open, closed it]`;
   }
 
   const ticketsAfter = await listAllTicketIds(pi, cwd);
-  const createdTickets = [...ticketsAfter].filter((id) => !ticketsBefore.has(id));
+  const createdTickets = [...ticketsAfter].filter(
+    (id) => !ticketsBefore.has(id),
+  );
 
   await recordHistory(cwd, state, {
     kind: "review",
@@ -827,7 +984,12 @@ async function doReview(
     summary: summarize(result, 300) + cleanupNote,
     createdTickets: createdTickets.length ? createdTickets : undefined,
   });
-  state.executedSinceReview = 0;
+  // Only clear the trigger counter on success. A failed/timed-out review leaves it at or above
+  // reviewEvery, so the next loop iteration retries review immediately instead of silently
+  // skipping reviewEvery more tickets before trying again — stoppedByFailureStreak still stops
+  // the loop after MAX_CONSECUTIVE_FAILURES if review is systemically broken rather than
+  // retrying forever.
+  if (result.ok) state.executedSinceReview = 0;
   return result.ok;
 }
 
@@ -939,7 +1101,10 @@ async function runFinalReviewIfNeeded(
  * MAX_HISTORY and would silently drop early tickets on a long run) and reports what
  * actually got done: tickets executed/planned/chosen and review outcomes.
  */
-async function buildFinalSummary(cwd: string, state: RalphState): Promise<string> {
+async function buildFinalSummary(
+  cwd: string,
+  state: RalphState,
+): Promise<string> {
   const raw = await readFile(
     join(cwd, STATE_DIR, "history.jsonl"),
     "utf8",
@@ -974,10 +1139,14 @@ async function buildFinalSummary(cwd: string, state: RalphState): Promise<string
       ? `Executed (${executed.length}): ${executed.join(", ")}`
       : "Executed: none",
   ];
-  if (planned.length) lines.push(`Also touched by planning: ${planned.join(", ")}`);
+  if (planned.length)
+    lines.push(`Also touched by planning: ${planned.join(", ")}`);
   if (promoted.length)
-    lines.push(`Promoted from Blocked to To Do (${promoted.length}): ${promoted.join(", ")}`);
-  if (executeFailed.length) lines.push(`Failed to execute: ${executeFailed.join(", ")}`);
+    lines.push(
+      `Promoted from Blocked to To Do (${promoted.length}): ${promoted.join(", ")}`,
+    );
+  if (executeFailed.length)
+    lines.push(`Failed to execute: ${executeFailed.join(", ")}`);
   lines.push(
     `Reviews: ${reviews.length} (${reviews.filter((r) => r.outcome === "ok").length} ok)`,
   );
@@ -989,7 +1158,9 @@ async function buildFinalSummary(cwd: string, state: RalphState): Promise<string
       ? `New tickets filed by review (${createdByReview.length}): ${createdByReview.join(", ")}`
       : "New tickets filed by review: none",
   );
-  const squashFailures = thisRun.filter((e) => e.kind === "squash" && e.outcome === "failed");
+  const squashFailures = thisRun.filter(
+    (e) => e.kind === "squash" && e.outcome === "failed",
+  );
   if (squashFailures.length) {
     lines.push(
       `Fixup squash failed ${squashFailures.length}x — left as separate commit(s), check history.jsonl`,
@@ -1094,7 +1265,12 @@ async function runLoop(
 
       let unblocked = await listUnblocked(pi, cwd);
       if (unblocked.length === 0) {
-        const promoted = await promoteUnblockedBlockedTickets(pi, ctx, cwd, state);
+        const promoted = await promoteUnblockedBlockedTickets(
+          pi,
+          ctx,
+          cwd,
+          state,
+        );
         await persist(cwd, state);
         renderWidget(ctx, state);
         if (promoted.length > 0) unblocked = await listUnblocked(pi, cwd);
@@ -1279,7 +1455,8 @@ const ralphStatusTool = defineTool({
   description:
     "Reports the live status of the autonomous ralph backlog loop (plan/execute/review tickets) " +
     "running in this pi session, if any: current step, iteration progress, and recent history.",
-  promptSnippet: "Check live status of the running ralph autonomous backlog loop",
+  promptSnippet:
+    "Check live status of the running ralph autonomous backlog loop",
   promptGuidelines: [
     "Use ralph_status when the user asks what ralph is doing, whether it's running or stuck, " +
       "or wants a progress update on the autonomous backlog loop.",
@@ -1300,7 +1477,10 @@ export default function (pi: ExtensionAPI) {
     const details = message.details as { level: "info" | "warn" } | undefined;
     const level = details?.level ?? "info";
     const color = level === "warn" ? "warning" : "success";
-    const prefix = theme.fg(color, `[ralph ${level === "warn" ? "needs you" : "done"}]`);
+    const prefix = theme.fg(
+      color,
+      `[ralph ${level === "warn" ? "needs you" : "done"}]`,
+    );
     const box = new Box(1, 1, (t) => theme.bg("customMessageBg", t));
     box.addChild(new Text(`${prefix} ${message.content}`, 0, 0));
     return box;
@@ -1323,6 +1503,20 @@ export default function (pi: ExtensionAPI) {
       if (process.env.HERDR_ENV !== "1") {
         ctx.ui.notify(
           "ralph requires running inside a herdr-managed pane (HERDR_ENV=1) because the review step drives a herdr pane.",
+          "error",
+        );
+        return;
+      }
+      // Captured once here rather than rediscovered by each review call via `herdr pane
+      // list` — the headless review subprocess runs in this same pane (it's a child process
+      // in the same terminal), so this env var already names it deterministically. Guarded
+      // separately from HERDR_ENV above: herdr should always set both together, but a prompt
+      // built around an empty pane id would fail confusingly deep into a review run instead
+      // of here at the point we can still give a clear error.
+      const mainPaneId = process.env.HERDR_PANE_ID;
+      if (!mainPaneId) {
+        ctx.ui.notify(
+          "ralph requires HERDR_PANE_ID to be set (herdr should set this alongside HERDR_ENV=1) so the review step knows which pane to split.",
           "error",
         );
         return;
@@ -1350,7 +1544,12 @@ export default function (pi: ExtensionAPI) {
       }
 
       const cwd = ctx.cwd;
-      activeState = createState(iterations, reviewEvery);
+      activeState = createState(
+        iterations,
+        reviewEvery,
+        ctx.sessionManager.getSessionId(),
+        mainPaneId,
+      );
       await persist(cwd, activeState);
       renderWidget(ctx, activeState);
       startWidgetTicker(ctx, activeState);
@@ -1405,7 +1604,10 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify("ralph has not been run in this session.", "info");
         return;
       }
-      if (activeState.status === "running" || activeState.status === "stopping") {
+      if (
+        activeState.status === "running" ||
+        activeState.status === "stopping"
+      ) {
         ctx.ui.notify(
           "ralph is still running — use /ralph-stop first, then /ralph-clear.",
           "warn",
