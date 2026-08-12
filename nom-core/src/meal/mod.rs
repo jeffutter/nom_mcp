@@ -218,12 +218,23 @@ async fn lookup_food(
             let name: String = row
                 .get(0)
                 .map_err(|e| ErrorData::storage_failure(format!("failed to read name: {e}")))?;
-            let cal: f64 = row.get(1).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-            let prot: f64 = row.get(2).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-            let carb: f64 = row.get(3).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-            let fat: f64 = row.get(4).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-            let fiber: f64 = row.get(5).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-            let serving_size_g = match row.get_value(6)
+            let cal: f64 = row
+                .get(1)
+                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+            let prot: f64 = row
+                .get(2)
+                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+            let carb: f64 = row
+                .get(3)
+                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+            let fat: f64 = row
+                .get(4)
+                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+            let fiber: f64 = row
+                .get(5)
+                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+            let serving_size_g = match row
+                .get_value(6)
                 .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
             {
                 turso::Value::Real(v) => Some(v),
@@ -302,7 +313,9 @@ async fn insert_meal(
                 ))),
             }
         }
-        None => Err(ErrorData::storage_failure("insert returned no row".to_string())),
+        None => Err(ErrorData::storage_failure(
+            "insert returned no row".to_string(),
+        )),
     }
 }
 
@@ -374,20 +387,35 @@ async fn build_meal_summary(conn: &Connection, meal_id: i64) -> Result<MealSumma
         return Err(ErrorData::not_found());
     };
 
-    let logged_at: String = meal_row.get(1).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-    let logged_date: String = meal_row.get(2).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+    let logged_at: String = meal_row
+        .get(1)
+        .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+    let logged_date: String = meal_row
+        .get(2)
+        .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
 
     let totals = MealTotals {
-        total_calories: meal_row.get::<f64>(3).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-        total_protein_g: meal_row.get::<f64>(4).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-        total_carbs_g: meal_row.get::<f64>(5).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-        total_fat_g: meal_row.get::<f64>(6).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-        total_fiber_g: meal_row.get::<f64>(7).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+        total_calories: meal_row
+            .get::<f64>(3)
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+        total_protein_g: meal_row
+            .get::<f64>(4)
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+        total_carbs_g: meal_row
+            .get::<f64>(5)
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+        total_fat_g: meal_row
+            .get::<f64>(6)
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+        total_fiber_g: meal_row
+            .get::<f64>(7)
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
     };
 
     // Read nullable adjustments
     let get_optional_f64 = |idx: usize| -> Result<Option<f64>, ErrorData> {
-        match meal_row.get_value(idx)
+        match meal_row
+            .get_value(idx)
             .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
         {
             turso::Value::Real(v) if !v.is_nan() => Ok(Some(v)),
@@ -402,8 +430,11 @@ async fn build_meal_summary(conn: &Connection, meal_id: i64) -> Result<MealSumma
     let adj_fat = get_optional_f64(11)?;
     let adj_fiber = get_optional_f64(12)?;
 
-    let adjustment = if adj_cal.is_some() || adj_prot.is_some() || adj_carb.is_some()
-        || adj_fat.is_some() || adj_fiber.is_some()
+    let adjustment = if adj_cal.is_some()
+        || adj_prot.is_some()
+        || adj_carb.is_some()
+        || adj_fat.is_some()
+        || adj_fiber.is_some()
     {
         Some(Adjustment {
             calories: adj_cal,
@@ -442,17 +473,38 @@ async fn build_meal_summary(conn: &Connection, meal_id: i64) -> Result<MealSumma
         .await
         .map_err(|e| ErrorData::storage_failure(format!("failed to read row: {e}")))?
     {
-        let pid: i64 = p_row.get(0).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-        let food_id: i64 = p_row.get(1).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-        let food_name: String = p_row.get(2).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-        let qty_mode: String = p_row.get(3).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-        let quantity: f64 = p_row.get(4).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-        let snap_cal: f64 = p_row.get(5).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-        let snap_prot: f64 = p_row.get(6).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-        let snap_carb: f64 = p_row.get(7).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-        let snap_fat: f64 = p_row.get(8).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-        let snap_fiber: f64 = p_row.get(9).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-        let snap_serving: Option<f64> = match p_row.get_value(10)
+        let pid: i64 = p_row
+            .get(0)
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+        let food_id: i64 = p_row
+            .get(1)
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+        let food_name: String = p_row
+            .get(2)
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+        let qty_mode: String = p_row
+            .get(3)
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+        let quantity: f64 = p_row
+            .get(4)
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+        let snap_cal: f64 = p_row
+            .get(5)
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+        let snap_prot: f64 = p_row
+            .get(6)
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+        let snap_carb: f64 = p_row
+            .get(7)
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+        let snap_fat: f64 = p_row
+            .get(8)
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+        let snap_fiber: f64 = p_row
+            .get(9)
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+        let snap_serving: Option<f64> = match p_row
+            .get_value(10)
             .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
         {
             turso::Value::Real(v) => Some(v),
@@ -460,8 +512,16 @@ async fn build_meal_summary(conn: &Connection, meal_id: i64) -> Result<MealSumma
             _ => None,
         };
 
-        let (cal, prot, carb, fat, fiber) =
-            compute_portion_macros(quantity, &qty_mode, snap_serving, snap_cal, snap_prot, snap_carb, snap_fat, snap_fiber);
+        let (cal, prot, carb, fat, fiber) = compute_portion_macros(
+            quantity,
+            &qty_mode,
+            snap_serving,
+            snap_cal,
+            snap_prot,
+            snap_carb,
+            snap_fat,
+            snap_fiber,
+        );
 
         portions.push(PortionSummary {
             id: pid,
@@ -597,13 +657,17 @@ impl Operation for LogMeal {
         let result = (async {
             // Step 1: Validate all inputs and look up foods
             let mut all_macros: Vec<(f64, f64, f64, f64, f64)> = Vec::new();
-            let mut snapshots: Vec<(i64, &str, f64, f64, f64, f64, f64, f64, Option<f64>)> = Vec::new();
+            let mut snapshots: Vec<(i64, &str, f64, f64, f64, f64, f64, f64, Option<f64>)> =
+                Vec::new();
 
             for portion in &req.portions {
                 if portion.quantity_mode != "grams" && portion.quantity_mode != "servings" {
                     return Err(ErrorData::validation(
                         "quantity_mode",
-                        format!("must be 'grams' or 'servings' (got '{}')", portion.quantity_mode),
+                        format!(
+                            "must be 'grams' or 'servings' (got '{}')",
+                            portion.quantity_mode
+                        ),
                     ));
                 }
                 if portion.quantity <= 0.0 {
@@ -620,7 +684,11 @@ impl Operation for LogMeal {
                     portion.quantity,
                     &portion.quantity_mode,
                     snap_serving,
-                    snap_cal, snap_prot, snap_carb, snap_fat, snap_fiber,
+                    snap_cal,
+                    snap_prot,
+                    snap_carb,
+                    snap_fat,
+                    snap_fiber,
                 );
                 all_macros.push(macros);
 
@@ -628,7 +696,12 @@ impl Operation for LogMeal {
                     portion.food_id,
                     &portion.quantity_mode,
                     portion.quantity,
-                    snap_cal, snap_prot, snap_carb, snap_fat, snap_fiber, snap_serving,
+                    snap_cal,
+                    snap_prot,
+                    snap_carb,
+                    snap_fat,
+                    snap_fiber,
+                    snap_serving,
                 ));
             }
 
@@ -648,11 +721,7 @@ impl Operation for LogMeal {
             // Step 4: Insert portions with correct meal_id
             for (food_id, qty_mode, qty, sc, sp, scc, sf, sfi, ss) in &snapshots {
                 insert_portion(
-                    &conn,
-                    meal_id,
-                    *food_id,
-                    qty_mode,
-                    *qty, *sc, *sp, *scc, *sf, *sfi, *ss,
+                    &conn, meal_id, *food_id, qty_mode, *qty, *sc, *sp, *scc, *sf, *sfi, *ss,
                 )
                 .await?;
             }
@@ -771,7 +840,8 @@ impl Operation for UpdateMeal {
                 .query((req.meal_id,))
                 .await
                 .map_err(|e| ErrorData::storage_failure(format!("query failed: {e}")))?;
-            if rows.next()
+            if rows
+                .next()
                 .await
                 .map_err(|e| ErrorData::storage_failure(format!("query failed: {e}")))?
                 .is_none()
@@ -973,9 +1043,9 @@ impl Operation for UpdateMeal {
                 conn.execute("COMMIT", ())
                     .await
                     .map_err(|e| ErrorData::storage_failure(format!("commit failed: {e}")))?;
-                Ok(serde_json::to_value(summary)
-                    .map_err(|e| ErrorData::storage_failure(format!("serialization failed: {e}")))?
-                )
+                Ok(serde_json::to_value(summary).map_err(|e| {
+                    ErrorData::storage_failure(format!("serialization failed: {e}"))
+                })?)
             }
             Err(e) => {
                 let _ = conn.execute("ROLLBACK", ()).await;
@@ -1062,7 +1132,8 @@ impl Operation for DeleteMeal {
                 .query((req.meal_id,))
                 .await
                 .map_err(|e| ErrorData::storage_failure(format!("query failed: {e}")))?;
-            if rows.next()
+            if rows
+                .next()
                 .await
                 .map_err(|e| ErrorData::storage_failure(format!("query failed: {e}")))?
                 .is_none()
@@ -1180,12 +1251,11 @@ impl Operation for SearchMeals {
             .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?;
 
         let like_pattern = format!("%{}%", req.query.to_lowercase());
-        let mut sql_parts = vec![
-            "SELECT DISTINCT m.id FROM meals m \
+        let mut sql_parts = vec!["SELECT DISTINCT m.id FROM meals m \
              JOIN portions p ON p.meal_id = m.id \
              JOIN foods f ON p.food_id = f.id \
-             WHERE LOWER(f.name) LIKE ?".to_string(),
-        ];
+             WHERE LOWER(f.name) LIKE ?"
+            .to_string()];
         let mut params: Vec<String> = vec![like_pattern];
 
         if let Some(ref range) = req.date_range {
@@ -1210,35 +1280,56 @@ impl Operation for SearchMeals {
         // Execute with dynamic param count
         let meal_ids: Vec<i64> = match params.len() {
             1 => {
-                let mut rows = stmt.query((params[0].as_str(),)).await
+                let mut rows = stmt
+                    .query((params[0].as_str(),))
+                    .await
                     .map_err(|e| ErrorData::storage_failure(format!("query failed: {e}")))?;
                 let mut ids = Vec::new();
-                while let Some(row) = rows.next().await
-                    .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))? {
-                    ids.push(row.get::<i64>(0)
-                        .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?);
+                while let Some(row) = rows
+                    .next()
+                    .await
+                    .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
+                {
+                    ids.push(
+                        row.get::<i64>(0)
+                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+                    );
                 }
                 ids
             }
             2 => {
-                let mut rows = stmt.query((params[0].as_str(), params[1].as_str())).await
+                let mut rows = stmt
+                    .query((params[0].as_str(), params[1].as_str()))
+                    .await
                     .map_err(|e| ErrorData::storage_failure(format!("query failed: {e}")))?;
                 let mut ids = Vec::new();
-                while let Some(row) = rows.next().await
-                    .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))? {
-                    ids.push(row.get::<i64>(0)
-                        .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?);
+                while let Some(row) = rows
+                    .next()
+                    .await
+                    .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
+                {
+                    ids.push(
+                        row.get::<i64>(0)
+                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+                    );
                 }
                 ids
             }
             3 => {
-                let mut rows = stmt.query((params[0].as_str(), params[1].as_str(), params[2].as_str())).await
+                let mut rows = stmt
+                    .query((params[0].as_str(), params[1].as_str(), params[2].as_str()))
+                    .await
                     .map_err(|e| ErrorData::storage_failure(format!("query failed: {e}")))?;
                 let mut ids = Vec::new();
-                while let Some(row) = rows.next().await
-                    .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))? {
-                    ids.push(row.get::<i64>(0)
-                        .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?);
+                while let Some(row) = rows
+                    .next()
+                    .await
+                    .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
+                {
+                    ids.push(
+                        row.get::<i64>(0)
+                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+                    );
                 }
                 ids
             }
@@ -1256,8 +1347,7 @@ impl Operation for SearchMeals {
         }
 
         Ok(serde_json::to_value(summaries)
-            .map_err(|e| ErrorData::storage_failure(format!("serialization failed: {e}")))?
-        )
+            .map_err(|e| ErrorData::storage_failure(format!("serialization failed: {e}")))?)
     }
 }
 
@@ -1350,7 +1440,8 @@ impl Operation for GetMealsByDateRange {
             .await
             .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
         {
-            let id: i64 = row.get(0)
+            let id: i64 = row
+                .get(0)
                 .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
             match build_meal_summary(&conn, id).await {
                 Ok(summary) => summaries.push(summary),
@@ -1361,8 +1452,7 @@ impl Operation for GetMealsByDateRange {
         }
 
         Ok(serde_json::to_value(summaries)
-            .map_err(|e| ErrorData::storage_failure(format!("serialization failed: {e}")))?
-        )
+            .map_err(|e| ErrorData::storage_failure(format!("serialization failed: {e}")))?)
     }
 }
 
@@ -1376,17 +1466,26 @@ mod tests {
     use crate::storage::test::TempDb;
 
     async fn seed_food(conn: &Connection, name: &str) -> Result<i64, ErrorData> {
-        let mut stmt = conn.prepare(
-            "INSERT INTO foods (source, name, calories_per_100g, protein_g_per_100g, \
+        let mut stmt = conn
+            .prepare(
+                "INSERT INTO foods (source, name, calories_per_100g, protein_g_per_100g, \
              carbs_g_per_100g, fat_g_per_100g, fiber_g_per_100g, serving_size_g) \
              VALUES ('Custom', ?, ?, ?, ?, ?, ?, ?) RETURNING id",
-        ).await.map_err(|e| ErrorData::storage_failure(format!("prepare failed: {e}")))?;
-        let mut rows = stmt.query((name, 250.0_f64, 20.0, 30.0, 8.0, 3.0, Some(150.0_f64)))
-            .await.map_err(|e| ErrorData::storage_failure(format!("insert failed: {e}")))?;
-        match rows.next().await
-            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))? {
+            )
+            .await
+            .map_err(|e| ErrorData::storage_failure(format!("prepare failed: {e}")))?;
+        let mut rows = stmt
+            .query((name, 250.0_f64, 20.0, 30.0, 8.0, 3.0, Some(150.0_f64)))
+            .await
+            .map_err(|e| ErrorData::storage_failure(format!("insert failed: {e}")))?;
+        match rows
+            .next()
+            .await
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
+        {
             Some(row) => {
-                let value = row.get_value(0)
+                let value = row
+                    .get_value(0)
                     .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
                 match value {
                     turso::Value::Integer(id) => Ok(id),
@@ -1399,10 +1498,8 @@ mod tests {
 
     #[test]
     fn test_compute_portion_macros_grams_mode() {
-        let (cal, prot, carb, fat, fiber) = compute_portion_macros(
-            200.0, "grams", Some(150.0),
-            250.0, 20.0, 30.0, 8.0, 3.0,
-        );
+        let (cal, prot, carb, fat, fiber) =
+            compute_portion_macros(200.0, "grams", Some(150.0), 250.0, 20.0, 30.0, 8.0, 3.0);
         assert!((cal - 500.0).abs() < 0.01);
         assert!((prot - 40.0).abs() < 0.01);
         assert!((carb - 60.0).abs() < 0.01);
@@ -1412,10 +1509,8 @@ mod tests {
 
     #[test]
     fn test_compute_portion_macros_servings_mode() {
-        let (cal, prot, carb, fat, fiber) = compute_portion_macros(
-            2.0, "servings", Some(150.0),
-            250.0, 20.0, 30.0, 8.0, 3.0,
-        );
+        let (cal, prot, carb, fat, fiber) =
+            compute_portion_macros(2.0, "servings", Some(150.0), 250.0, 20.0, 30.0, 8.0, 3.0);
         assert!((cal - 750.0).abs() < 0.01);
         assert!((prot - 60.0).abs() < 0.01);
         assert!((carb - 90.0).abs() < 0.01);
@@ -1425,10 +1520,8 @@ mod tests {
 
     #[test]
     fn test_compute_portion_macros_servings_no_serving_size() {
-        let (cal, _, _, _, _) = compute_portion_macros(
-            100.0, "servings", None,
-            250.0, 20.0, 30.0, 8.0, 3.0,
-        );
+        let (cal, _, _, _, _) =
+            compute_portion_macros(100.0, "servings", None, 250.0, 20.0, 30.0, 8.0, 3.0);
         assert!((cal - 250.0).abs() < 0.01);
     }
 
@@ -1475,11 +1568,14 @@ mod tests {
         let clock = Clock { tz: chrono_tz::UTC };
         let op = LogMeal::new(clock).with_db_path(db.path.clone());
 
-        let result = op.execute_json(Arc::new(serde_json::json!({
-            "portions": [
-                {"food_id": food_id, "quantity": 200.0, "quantity_mode": "grams"}
-            ]
-        }))).await.unwrap();
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "portions": [
+                    {"food_id": food_id, "quantity": 200.0, "quantity_mode": "grams"}
+                ]
+            })))
+            .await
+            .unwrap();
 
         assert!(result["meal_id"].is_i64());
         assert!(result["meal_id"].as_i64().unwrap() > 0);
@@ -1488,9 +1584,10 @@ mod tests {
 
         // Verify snapshot was captured
         let conn = Connection::open_at(&db.path).await.unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT snapshot_calories_per_100g FROM portions WHERE food_id = ?",
-        ).await.unwrap();
+        let mut stmt = conn
+            .prepare("SELECT snapshot_calories_per_100g FROM portions WHERE food_id = ?")
+            .await
+            .unwrap();
         let mut rows = stmt.query((food_id,)).await.unwrap();
         let row = rows.next().await.unwrap().unwrap();
         let snap_cal: f64 = row.get(0).unwrap();
@@ -1508,12 +1605,15 @@ mod tests {
         let clock = Clock { tz: chrono_tz::UTC };
         let op = LogMeal::new(clock).with_db_path(db.path.clone());
 
-        let result = op.execute_json(Arc::new(serde_json::json!({
-            "portions": [
-                {"food_id": food_id, "quantity": 200.0, "quantity_mode": "grams"}
-            ],
-            "adjustment": {"calories": -50.0}
-        }))).await.unwrap();
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "portions": [
+                    {"food_id": food_id, "quantity": 200.0, "quantity_mode": "grams"}
+                ],
+                "adjustment": {"calories": -50.0}
+            })))
+            .await
+            .unwrap();
 
         // 200g: 250 cal/100g * 200/100 = 500; minus 50 adjustment = 450
         assert_eq!(result["totals"]["total_calories"], 450.0);
@@ -1526,11 +1626,14 @@ mod tests {
         let clock = Clock { tz: chrono_tz::UTC };
         let op = LogMeal::new(clock).with_db_path(db.path.clone());
 
-        let err = op.execute_json(Arc::new(serde_json::json!({
-            "portions": [
-                {"food_id": 99999, "quantity": 100.0, "quantity_mode": "grams"}
-            ]
-        }))).await.unwrap_err();
+        let err = op
+            .execute_json(Arc::new(serde_json::json!({
+                "portions": [
+                    {"food_id": 99999, "quantity": 100.0, "quantity_mode": "grams"}
+                ]
+            })))
+            .await
+            .unwrap_err();
 
         assert_eq!(err.category, crate::error::ErrorCategory::NotFound);
     }
@@ -1542,9 +1645,12 @@ mod tests {
         let clock = Clock { tz: chrono_tz::UTC };
         let op = LogMeal::new(clock).with_db_path(db.path.clone());
 
-        let err = op.execute_json(Arc::new(serde_json::json!({
-            "portions": []
-        }))).await.unwrap_err();
+        let err = op
+            .execute_json(Arc::new(serde_json::json!({
+                "portions": []
+            })))
+            .await
+            .unwrap_err();
 
         assert_eq!(err.category, crate::error::ErrorCategory::Validation);
     }
@@ -1560,11 +1666,14 @@ mod tests {
         let clock = Clock { tz: chrono_tz::UTC };
         let op = LogMeal::new(clock).with_db_path(db.path.clone());
 
-        let err = op.execute_json(Arc::new(serde_json::json!({
-            "portions": [
-                {"food_id": food_id, "quantity": 0.0, "quantity_mode": "grams"}
-            ]
-        }))).await.unwrap_err();
+        let err = op
+            .execute_json(Arc::new(serde_json::json!({
+                "portions": [
+                    {"food_id": food_id, "quantity": 0.0, "quantity_mode": "grams"}
+                ]
+            })))
+            .await
+            .unwrap_err();
 
         assert_eq!(err.category, crate::error::ErrorCategory::Validation);
     }
@@ -1581,22 +1690,34 @@ mod tests {
         let clock = Clock { tz: chrono_tz::UTC };
         // First log a meal with food_a
         let log_op = LogMeal::new(clock).with_db_path(db.path.clone());
-        let log_result = log_op.execute_json(Arc::new(serde_json::json!({
-            "portions": [{"food_id": food_a, "quantity": 100.0, "quantity_mode": "grams"}]
-        }))).await.unwrap();
+        let log_result = log_op
+            .execute_json(Arc::new(serde_json::json!({
+                "portions": [{"food_id": food_a, "quantity": 100.0, "quantity_mode": "grams"}]
+            })))
+            .await
+            .unwrap();
         let meal_id = log_result["meal_id"].as_i64().unwrap();
 
         // Now update with food_b — full replacement
         let update_op = UpdateMeal::new(clock).with_db_path(db.path.clone());
-        let update_result = update_op.execute_json(Arc::new(serde_json::json!({
-            "meal_id": meal_id,
-            "portions": [{"food_id": food_b, "quantity": 150.0, "quantity_mode": "grams"}]
-        }))).await.unwrap();
+        let update_result = update_op
+            .execute_json(Arc::new(serde_json::json!({
+                "meal_id": meal_id,
+                "portions": [{"food_id": food_b, "quantity": 150.0, "quantity_mode": "grams"}]
+            })))
+            .await
+            .unwrap();
 
         // Verify the meal now has only food_b
         assert_eq!(update_result["portions"].as_array().unwrap().len(), 1);
-        assert_eq!(update_result["portions"][0]["food_id"].as_i64().unwrap(), food_b);
-        assert_eq!(update_result["portions"][0]["quantity"].as_f64().unwrap(), 150.0);
+        assert_eq!(
+            update_result["portions"][0]["food_id"].as_i64().unwrap(),
+            food_b
+        );
+        assert_eq!(
+            update_result["portions"][0]["quantity"].as_f64().unwrap(),
+            150.0
+        );
     }
 
     #[serial_test::serial]
@@ -1609,21 +1730,30 @@ mod tests {
 
         let clock = Clock { tz: chrono_tz::UTC };
         let log_op = LogMeal::new(clock).with_db_path(db.path.clone());
-        let log_result = log_op.execute_json(Arc::new(serde_json::json!({
-            "portions": [{"food_id": food_id, "quantity": 100.0, "quantity_mode": "grams"}]
-        }))).await.unwrap();
+        let log_result = log_op
+            .execute_json(Arc::new(serde_json::json!({
+                "portions": [{"food_id": food_id, "quantity": 100.0, "quantity_mode": "grams"}]
+            })))
+            .await
+            .unwrap();
         let meal_id = log_result["meal_id"].as_i64().unwrap();
 
         // Update only adjustment — portions should remain
         let update_op = UpdateMeal::new(clock).with_db_path(db.path.clone());
-        let update_result = update_op.execute_json(Arc::new(serde_json::json!({
-            "meal_id": meal_id,
-            "adjustment": {"calories": 50.0}
-        }))).await.unwrap();
+        let update_result = update_op
+            .execute_json(Arc::new(serde_json::json!({
+                "meal_id": meal_id,
+                "adjustment": {"calories": 50.0}
+            })))
+            .await
+            .unwrap();
 
         // Portions still present (not replaced)
         assert_eq!(update_result["portions"].as_array().unwrap().len(), 1);
-        assert_eq!(update_result["portions"][0]["food_id"].as_i64().unwrap(), food_id);
+        assert_eq!(
+            update_result["portions"][0]["food_id"].as_i64().unwrap(),
+            food_id
+        );
         // Adjustment applied: original was 250 cal (100g * 250/100), + 50 = 300
         assert_eq!(update_result["totals"]["total_calories"], 300.0);
     }
@@ -1638,18 +1768,24 @@ mod tests {
 
         let clock = Clock { tz: chrono_tz::UTC };
         let log_op = LogMeal::new(clock).with_db_path(db.path.clone());
-        let log_result = log_op.execute_json(Arc::new(serde_json::json!({
-            "portions": [
-                {"food_id": food_id, "quantity": 100.0, "quantity_mode": "grams"}
-            ]
-        }))).await.unwrap();
+        let log_result = log_op
+            .execute_json(Arc::new(serde_json::json!({
+                "portions": [
+                    {"food_id": food_id, "quantity": 100.0, "quantity_mode": "grams"}
+                ]
+            })))
+            .await
+            .unwrap();
         let meal_id = log_result["meal_id"].as_i64().unwrap();
 
         // Delete the meal
         let delete_op = DeleteMeal::new().with_db_path(db.path.clone());
-        let delete_result = delete_op.execute_json(Arc::new(serde_json::json!({
-            "meal_id": meal_id
-        }))).await.unwrap();
+        let delete_result = delete_op
+            .execute_json(Arc::new(serde_json::json!({
+                "meal_id": meal_id
+            })))
+            .await
+            .unwrap();
 
         assert_eq!(delete_result["deleted"], true);
         assert_eq!(delete_result["meal_id"], meal_id as i64);
@@ -1663,7 +1799,10 @@ mod tests {
             assert_eq!(count, 0);
         }
         {
-            let mut rows = conn.query("SELECT COUNT(*) FROM portions", ()).await.unwrap();
+            let mut rows = conn
+                .query("SELECT COUNT(*) FROM portions", ())
+                .await
+                .unwrap();
             let row = rows.next().await.unwrap().unwrap();
             let count: i64 = row.get(0).unwrap();
             assert_eq!(count, 0);
@@ -1676,9 +1815,12 @@ mod tests {
         let db = TempDb::new().await;
         let delete_op = DeleteMeal::new().with_db_path(db.path.clone());
 
-        let err = delete_op.execute_json(Arc::new(serde_json::json!({
-            "meal_id": 99999
-        }))).await.unwrap_err();
+        let err = delete_op
+            .execute_json(Arc::new(serde_json::json!({
+                "meal_id": 99999
+            })))
+            .await
+            .unwrap_err();
 
         assert_eq!(err.category, crate::error::ErrorCategory::NotFound);
     }
@@ -1696,24 +1838,36 @@ mod tests {
         let log_op = LogMeal::new(clock).with_db_path(db.path.clone());
 
         // Log a meal with chicken
-        log_op.execute_json(Arc::new(serde_json::json!({
-            "portions": [{"food_id": chicken_id, "quantity": 100.0, "quantity_mode": "grams"}]
-        }))).await.unwrap();
+        log_op
+            .execute_json(Arc::new(serde_json::json!({
+                "portions": [{"food_id": chicken_id, "quantity": 100.0, "quantity_mode": "grams"}]
+            })))
+            .await
+            .unwrap();
 
         // Log a meal with rice
-        log_op.execute_json(Arc::new(serde_json::json!({
-            "portions": [{"food_id": rice_id, "quantity": 150.0, "quantity_mode": "grams"}]
-        }))).await.unwrap();
+        log_op
+            .execute_json(Arc::new(serde_json::json!({
+                "portions": [{"food_id": rice_id, "quantity": 150.0, "quantity_mode": "grams"}]
+            })))
+            .await
+            .unwrap();
 
         // Search for "chicken" — should find only the chicken meal
         let search_op = SearchMeals::new().with_db_path(db.path.clone());
-        let result = search_op.execute_json(Arc::new(serde_json::json!({
-            "query": "chicken"
-        }))).await.unwrap();
+        let result = search_op
+            .execute_json(Arc::new(serde_json::json!({
+                "query": "chicken"
+            })))
+            .await
+            .unwrap();
 
         let arr = result.as_array().unwrap();
         assert_eq!(arr.len(), 1);
-        assert!(arr[0]["portions"][0]["food_name"].as_str().unwrap().contains("Chicken"));
+        assert!(arr[0]["portions"][0]["food_name"]
+            .as_str()
+            .unwrap()
+            .contains("Chicken"));
     }
 
     #[serial_test::serial]
@@ -1728,26 +1882,35 @@ mod tests {
         let today = Clock::format_date(clock.today());
 
         let log_op = LogMeal::new(clock).with_db_path(db.path.clone());
-        log_op.execute_json(Arc::new(serde_json::json!({
-            "portions": [{"food_id": food_id, "quantity": 200.0, "quantity_mode": "grams"}],
-            "logged_at": "2025-06-15T08:00:00Z"
-        }))).await.unwrap();
+        log_op
+            .execute_json(Arc::new(serde_json::json!({
+                "portions": [{"food_id": food_id, "quantity": 200.0, "quantity_mode": "grams"}],
+                "logged_at": "2025-06-15T08:00:00Z"
+            })))
+            .await
+            .unwrap();
 
         let op = GetMealsByDateRange::new().with_db_path(db.path.clone());
-        let result = op.execute_json(Arc::new(serde_json::json!({
-            "start_date": "2025-06-15",
-            "end_date": "2025-06-15"
-        }))).await.unwrap();
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "start_date": "2025-06-15",
+                "end_date": "2025-06-15"
+            })))
+            .await
+            .unwrap();
 
         let arr = result.as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["logged_date"], "2025-06-15");
 
         // Query by today's date should not include the June meal
-        let result_today = op.execute_json(Arc::new(serde_json::json!({
-            "start_date": today,
-            "end_date": today
-        }))).await.unwrap();
+        let result_today = op
+            .execute_json(Arc::new(serde_json::json!({
+                "start_date": today,
+                "end_date": today
+            })))
+            .await
+            .unwrap();
         assert!(result_today.as_array().unwrap().is_empty());
     }
 
@@ -1761,9 +1924,12 @@ mod tests {
 
         let clock = Clock { tz: chrono_tz::UTC };
         let log_op = LogMeal::new(clock).with_db_path(db.path.clone());
-        let log_result = log_op.execute_json(Arc::new(serde_json::json!({
-            "portions": [{"food_id": food_id, "quantity": 50.0, "quantity_mode": "grams"}]
-        }))).await.unwrap();
+        let log_result = log_op
+            .execute_json(Arc::new(serde_json::json!({
+                "portions": [{"food_id": food_id, "quantity": 50.0, "quantity_mode": "grams"}]
+            })))
+            .await
+            .unwrap();
         let meal_id = log_result["meal_id"].as_i64().unwrap();
 
         // Now update the food catalog data (simulating nutrition info correction)
@@ -1771,21 +1937,28 @@ mod tests {
         conn.execute(
             "UPDATE foods SET calories_per_100g = 999.0 WHERE id = ?",
             (food_id,),
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
         drop(conn);
 
         // Update meal with new quantity — NEW portion gets fresh snapshot from current catalog
         let update_op = UpdateMeal::new(clock).with_db_path(db.path.clone());
-        let update_result = update_op.execute_json(Arc::new(serde_json::json!({
-            "meal_id": meal_id,
-            "portions": [{"food_id": food_id, "quantity": 100.0, "quantity_mode": "grams"}]
-        }))).await.unwrap();
+        let update_result = update_op
+            .execute_json(Arc::new(serde_json::json!({
+                "meal_id": meal_id,
+                "portions": [{"food_id": food_id, "quantity": 100.0, "quantity_mode": "grams"}]
+            })))
+            .await
+            .unwrap();
 
         // The REPLACED portion gets a fresh snapshot (999 cal/100g since catalog was updated)
         // This verifies that update_meal captures a new snapshot at replacement time
         let portion_cal = update_result["portions"][0]["calories"].as_f64().unwrap();
-        assert!((portion_cal - 999.0).abs() < 0.01,
-            "Replaced portion should get fresh snapshot from current catalog (999)");
+        assert!(
+            (portion_cal - 999.0).abs() < 0.01,
+            "Replaced portion should get fresh snapshot from current catalog (999)"
+        );
     }
 
     #[serial_test::serial]
@@ -1801,9 +1974,12 @@ mod tests {
 
         // 2 servings, serving_size_g=150 → effective 300g
         // 250 cal/100g * 300/100 = 750 cal
-        let result = op.execute_json(Arc::new(serde_json::json!({
-            "portions": [{"food_id": food_id, "quantity": 2.0, "quantity_mode": "servings"}]
-        }))).await.unwrap();
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "portions": [{"food_id": food_id, "quantity": 2.0, "quantity_mode": "servings"}]
+            })))
+            .await
+            .unwrap();
 
         assert_eq!(result["totals"]["total_calories"], 750.0);
     }
@@ -1815,10 +1991,13 @@ mod tests {
         let clock = Clock { tz: chrono_tz::UTC };
         let update_op = UpdateMeal::new(clock).with_db_path(db.path.clone());
 
-        let err = update_op.execute_json(Arc::new(serde_json::json!({
-            "meal_id": 99999,
-            "adjustment": {"calories": 10.0}
-        }))).await.unwrap_err();
+        let err = update_op
+            .execute_json(Arc::new(serde_json::json!({
+                "meal_id": 99999,
+                "adjustment": {"calories": 10.0}
+            })))
+            .await
+            .unwrap_err();
 
         assert_eq!(err.category, crate::error::ErrorCategory::NotFound);
     }
@@ -1828,9 +2007,12 @@ mod tests {
     async fn test_search_meals_no_results() {
         let db = TempDb::new().await;
         let search_op = SearchMeals::new().with_db_path(db.path.clone());
-        let result = search_op.execute_json(Arc::new(serde_json::json!({
-            "query": "nonexistent"
-        }))).await.unwrap();
+        let result = search_op
+            .execute_json(Arc::new(serde_json::json!({
+                "query": "nonexistent"
+            })))
+            .await
+            .unwrap();
 
         assert!(result.as_array().unwrap().is_empty());
     }
@@ -1840,10 +2022,13 @@ mod tests {
     async fn test_get_meals_by_date_range_empty() {
         let db = TempDb::new().await;
         let op = GetMealsByDateRange::new().with_db_path(db.path.clone());
-        let result = op.execute_json(Arc::new(serde_json::json!({
-            "start_date": "2025-01-01",
-            "end_date": "2025-01-31"
-        }))).await.unwrap();
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-31"
+            })))
+            .await
+            .unwrap();
 
         assert!(result.as_array().unwrap().is_empty());
     }
