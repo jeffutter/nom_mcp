@@ -71,6 +71,9 @@ pub enum OffError {
     #[error("invalid base URL: {0}")]
     InvalidUrl(#[from] url::ParseError),
 
+    #[error("base URL cannot be used for path segment modification")]
+    InvalidBase,
+
     #[error("request failed: {0}")]
     Request(#[from] reqwest::Error),
 
@@ -96,6 +99,9 @@ impl OffClient {
     /// provided user-agent string (typically from config).
     pub fn new(base_url: &str, user_agent: &str) -> Result<Self, OffError> {
         let url = Url::parse(base_url)?;
+        if url.cannot_be_a_base() {
+            return Err(OffError::InvalidBase);
+        }
         let http = reqwest::Client::builder().user_agent(user_agent).build()?;
         Ok(Self {
             http,
@@ -116,8 +122,12 @@ impl OffClient {
         // Normalize: strip hyphens/spaces from barcode input
         let normalized = barcode.replace(['-', ' ', '\t'], "");
 
-        // Build URL with fields= param to minimize payload
-        let base = self.base_url.as_str().trim_end_matches('/');
+        // Build URL with structured path/query API to percent-encode the barcode.
+        // This prevents path/query injection from untrusted barcode values.
+        let mut url = self.base_url.clone();
+        url.path_segments_mut()
+            .map_err(|_| OffError::InvalidBase)?
+            .extend(["api", "v2", "product", &normalized]);
         let fields = [
             "code",
             "product_name",
@@ -134,14 +144,10 @@ impl OffClient {
             "nutriments:fiber",
             "nutriments:fiber_100g",
         ];
-        let url = format!(
-            "{}/api/v2/product/{}?fields={}",
-            base,
-            normalized,
-            fields.join(",")
-        );
+        url.query_pairs_mut()
+            .append_pair("fields", &fields.join(","));
 
-        let resp = self.http.get(&url).send().await?;
+        let resp = self.http.get(url.as_str()).send().await?;
         let body: OffResponse = resp.json().await?;
 
         match body.status {
@@ -289,6 +295,15 @@ mod tests {
         assert!(client.base_url.as_str().contains("openfoodfacts"));
     }
 
+    #[test]
+    fn test_client_new_rejects_non_base_url() {
+        // "mailto:" URLs parse successfully but cannot be used as a base for
+        // path_segments_mut(), so construction must fail with an error
+        // rather than panicking.
+        let result = OffClient::new("mailto:foo@bar.com", "my-agent/1.0");
+        assert!(matches!(result, Err(OffError::InvalidBase)));
+    }
+
     // -- Integration tests with wiremock --
 
     #[tokio::test]
@@ -428,5 +443,54 @@ mod tests {
         let client = OffClient::new(&base_url, "custom-agent/2.0").unwrap();
         client.lookup_barcode("111").await.unwrap();
         // If we get here without the mock rejecting the request, the header matched
+    }
+
+    #[tokio::test]
+    async fn test_lookup_barcode_injection_prevented() {
+        let server = wiremock::MockServer::start().await;
+        let base_url = server.uri();
+
+        // Barcode containing '/' must reach the server as %2F in the path,
+        // not split the path into extra segments.
+        Mock::given(method("GET"))
+            .and(path("/api/v2/product/123%2F456"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": "123/456",
+                "status": 1,
+                "product": { "product_name": "Slash Barcode" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = OffClient::new(&base_url, "test-agent/1.0").unwrap();
+        let result = client.lookup_barcode("123/456").await.unwrap();
+        let product = result.unwrap();
+        assert_eq!(product.product_name, Some("Slash Barcode".into()));
+    }
+
+    #[tokio::test]
+    async fn test_lookup_barcode_query_injection_prevented() {
+        let server = wiremock::MockServer::start().await;
+        let base_url = server.uri();
+
+        // Barcode containing '?evil=1' must reach the server with '?' encoded as %3F
+        // in the path segment, NOT interpreted as query-string delimiter.
+        // '=' is valid in path segments so it remains unencoded.
+        Mock::given(method("GET"))
+            .and(path("/api/v2/product/123%3Fevil=1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": "123?evil=1",
+                "status": 1,
+                "product": { "product_name": "Query Injection Attempt" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = OffClient::new(&base_url, "test-agent/1.0").unwrap();
+        let result = client.lookup_barcode("123?evil=1").await.unwrap();
+        let product = result.unwrap();
+        assert_eq!(product.product_name, Some("Query Injection Attempt".into()));
     }
 }
