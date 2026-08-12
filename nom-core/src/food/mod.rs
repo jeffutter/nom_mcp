@@ -50,6 +50,19 @@ pub struct FoodCandidate {
     pub serving_size_g: Option<f64>,
 }
 
+/// Grouped nutrient values per 100g.
+///
+/// Used as a single parameter for DB helper functions to avoid
+/// `too_many_arguments` clippy warnings and transposition hazards.
+#[derive(Debug, Clone, Copy)]
+struct NutrientValues {
+    calories: f64,
+    protein_g: f64,
+    carbs_g: f64,
+    fat_g: f64,
+    fiber_g: f64,
+}
+
 /// Convert per-serving nutrients to per-100g values.
 ///
 /// Formula: `(nutrient_at_serving * 100.0) / serving_size_g`
@@ -85,11 +98,7 @@ async fn upsert_catalog_food(
     source: &str,
     external_id: &str,
     name: &str,
-    calories: f64,
-    protein: f64,
-    carbs: f64,
-    fat: f64,
-    fiber: f64,
+    nutrients: NutrientValues,
     serving_size_g: Option<f64>,
 ) -> Result<i64, ErrorData> {
     let sql = r#"
@@ -117,11 +126,11 @@ async fn upsert_catalog_food(
             source,
             external_id,
             name,
-            calories,
-            protein,
-            carbs,
-            fat,
-            fiber,
+            nutrients.calories,
+            nutrients.protein_g,
+            nutrients.carbs_g,
+            nutrients.fat_g,
+            nutrients.fiber_g,
             serving_size_g,
         ))
         .await
@@ -156,11 +165,7 @@ async fn upsert_catalog_food(
 async fn insert_custom_food(
     conn: &Connection,
     name: &str,
-    calories: f64,
-    protein: f64,
-    carbs: f64,
-    fat: f64,
-    fiber: f64,
+    nutrients: NutrientValues,
     serving_size_g: Option<f64>,
 ) -> Result<i64, ErrorData> {
     let sql = r#"
@@ -176,7 +181,15 @@ async fn insert_custom_food(
         .map_err(|e| ErrorData::storage_failure(format!("prepare insert failed: {e}")))?;
 
     let mut rows = stmt
-        .query((name, calories, protein, carbs, fat, fiber, serving_size_g))
+        .query((
+            name,
+            nutrients.calories,
+            nutrients.protein_g,
+            nutrients.carbs_g,
+            nutrients.fat_g,
+            nutrients.fiber_g,
+            serving_size_g,
+        ))
         .await
         .map_err(|e| ErrorData::storage_failure(format!("insert query failed: {e}")))?;
 
@@ -289,14 +302,15 @@ async fn search_custom_foods(
 }
 
 /// Extract macros from an OFF Product, preferring `_100g` fields when available.
-fn extract_off_macros(product: &crate::client::off::Product) -> (f64, f64, f64, f64, f64) {
+fn extract_off_macros(product: &crate::client::off::Product) -> NutrientValues {
     let nutriments = product.nutriments.as_ref();
-    let calories = nutriments.and_then(|n| n.energy_kcal_100g).unwrap_or(0.0);
-    let protein = nutriments.and_then(|n| n.proteins_100g).unwrap_or(0.0);
-    let carbs = nutriments.and_then(|n| n.carbohydrates_100g).unwrap_or(0.0);
-    let fat = nutriments.and_then(|n| n.fat_100g).unwrap_or(0.0);
-    let fiber = nutriments.and_then(|n| n.fiber_100g).unwrap_or(0.0);
-    (calories, protein, carbs, fat, fiber)
+    NutrientValues {
+        calories: nutriments.and_then(|n| n.energy_kcal_100g).unwrap_or(0.0),
+        protein_g: nutriments.and_then(|n| n.proteins_100g).unwrap_or(0.0),
+        carbs_g: nutriments.and_then(|n| n.carbohydrates_100g).unwrap_or(0.0),
+        fat_g: nutriments.and_then(|n| n.fat_100g).unwrap_or(0.0),
+        fiber_g: nutriments.and_then(|n| n.fiber_100g).unwrap_or(0.0),
+    }
 }
 
 /// Merge search results: Custom-first ordering, deduplicate by name (case-insensitive), cap at total.
@@ -420,7 +434,7 @@ impl SearchFood {
                     .product_name
                     .clone()
                     .unwrap_or_else(|| query.to_string());
-                let (calories, protein, carbs, fat, fiber) = extract_off_macros(&product);
+                let macros = extract_off_macros(&product);
                 let serving_size_g = product.serving_size;
 
                 // Use the barcode as external_id
@@ -431,11 +445,7 @@ impl SearchFood {
                     "OpenFoodFacts",
                     &external_id,
                     &name,
-                    calories,
-                    protein,
-                    carbs,
-                    fat,
-                    fiber,
+                    macros,
                     serving_size_g,
                 )
                 .await?;
@@ -444,11 +454,11 @@ impl SearchFood {
                     food_id,
                     name,
                     source: "OpenFoodFacts".to_string(),
-                    calories_per_100g: calories,
-                    protein_g_per_100g: protein,
-                    carbs_g_per_100g: carbs,
-                    fat_g_per_100g: fat,
-                    fiber_g_per_100g: fiber,
+                    calories_per_100g: macros.calories,
+                    protein_g_per_100g: macros.protein_g,
+                    carbs_g_per_100g: macros.carbs_g,
+                    fat_g_per_100g: macros.fat_g,
+                    fiber_g_per_100g: macros.fiber_g,
                     serving_size_g,
                 }])
             }
@@ -487,16 +497,20 @@ impl SearchFood {
                                     let serving_size_g =
                                         food.portion_info().first().map(|p| p.gram_weight);
 
+                                    let nutrients = NutrientValues {
+                                        calories: macros.energy_kcal.unwrap_or(0.0),
+                                        protein_g: macros.protein_g.unwrap_or(0.0),
+                                        carbs_g: macros.carbs_g.unwrap_or(0.0),
+                                        fat_g: macros.fat_g.unwrap_or(0.0),
+                                        fiber_g: macros.fiber_g.unwrap_or(0.0),
+                                    };
+
                                     let food_id = upsert_catalog_food(
                                         conn,
                                         "USDA_FDC",
                                         &food.fdc_id.to_string(),
                                         &name,
-                                        macros.energy_kcal.unwrap_or(0.0),
-                                        macros.protein_g.unwrap_or(0.0),
-                                        macros.carbs_g.unwrap_or(0.0),
-                                        macros.fat_g.unwrap_or(0.0),
-                                        macros.fiber_g.unwrap_or(0.0),
+                                        nutrients,
                                         serving_size_g,
                                     )
                                     .await?;
@@ -505,11 +519,11 @@ impl SearchFood {
                                         food_id,
                                         name,
                                         source: "USDA_FDC".to_string(),
-                                        calories_per_100g: macros.energy_kcal.unwrap_or(0.0),
-                                        protein_g_per_100g: macros.protein_g.unwrap_or(0.0),
-                                        carbs_g_per_100g: macros.carbs_g.unwrap_or(0.0),
-                                        fat_g_per_100g: macros.fat_g.unwrap_or(0.0),
-                                        fiber_g_per_100g: macros.fiber_g.unwrap_or(0.0),
+                                        calories_per_100g: nutrients.calories,
+                                        protein_g_per_100g: nutrients.protein_g,
+                                        carbs_g_per_100g: nutrients.carbs_g,
+                                        fat_g_per_100g: nutrients.fat_g,
+                                        fiber_g_per_100g: nutrients.fiber_g,
                                         serving_size_g,
                                     });
                                 }
@@ -658,20 +672,18 @@ impl Operation for CreateCustomFood {
         // Convert per-serving nutrients to per-100g
         // Unit is already validated as gram-based above
         let serving_size_g = req.serving_size.quantity;
-        let calories = convert_to_per_100g(req.nutrients.calories, serving_size_g);
-        let protein = convert_to_per_100g(req.nutrients.protein_g, serving_size_g);
-        let carbs = convert_to_per_100g(req.nutrients.carbs_g, serving_size_g);
-        let fat = convert_to_per_100g(req.nutrients.fat_g, serving_size_g);
-        let fiber = convert_to_per_100g(req.nutrients.fiber_g, serving_size_g);
+        let nutrients = NutrientValues {
+            calories: convert_to_per_100g(req.nutrients.calories, serving_size_g),
+            protein_g: convert_to_per_100g(req.nutrients.protein_g, serving_size_g),
+            carbs_g: convert_to_per_100g(req.nutrients.carbs_g, serving_size_g),
+            fat_g: convert_to_per_100g(req.nutrients.fat_g, serving_size_g),
+            fiber_g: convert_to_per_100g(req.nutrients.fiber_g, serving_size_g),
+        };
 
         let food_id = insert_custom_food(
             &conn,
             &req.name,
-            calories,
-            protein,
-            carbs,
-            fat,
-            fiber,
+            nutrients,
             Some(serving_size_g),
         )
         .await?;
@@ -680,11 +692,11 @@ impl Operation for CreateCustomFood {
             food_id,
             name: req.name,
             source: "Custom".to_string(),
-            calories_per_100g: calories,
-            protein_g_per_100g: protein,
-            carbs_g_per_100g: carbs,
-            fat_g_per_100g: fat,
-            fiber_g_per_100g: fiber,
+            calories_per_100g: nutrients.calories,
+            protein_g_per_100g: nutrients.protein_g,
+            carbs_g_per_100g: nutrients.carbs_g,
+            fat_g_per_100g: nutrients.fat_g,
+            fiber_g_per_100g: nutrients.fiber_g,
             serving_size_g: Some(serving_size_g),
         }))
     }
@@ -768,12 +780,12 @@ mod tests {
                 fiber_100g: Some(3.0),
             }),
         };
-        let (cal, prot, carb, fat, fib) = extract_off_macros(&product);
-        assert_eq!(cal, 300.0);
-        assert_eq!(prot, 15.0);
-        assert_eq!(carb, 40.0);
-        assert_eq!(fat, 5.0);
-        assert_eq!(fib, 3.0);
+        let macros = extract_off_macros(&product);
+        assert_eq!(macros.calories, 300.0);
+        assert_eq!(macros.protein_g, 15.0);
+        assert_eq!(macros.carbs_g, 40.0);
+        assert_eq!(macros.fat_g, 5.0);
+        assert_eq!(macros.fiber_g, 3.0);
     }
 
     #[test]
@@ -784,12 +796,12 @@ mod tests {
             nutrition_data_per: None,
             nutriments: Some(crate::client::off::Nutriments::default()),
         };
-        let (cal, prot, carb, fat, fib) = extract_off_macros(&product);
-        assert_eq!(cal, 0.0);
-        assert_eq!(prot, 0.0);
-        assert_eq!(carb, 0.0);
-        assert_eq!(fat, 0.0);
-        assert_eq!(fib, 0.0);
+        let macros = extract_off_macros(&product);
+        assert_eq!(macros.calories, 0.0);
+        assert_eq!(macros.protein_g, 0.0);
+        assert_eq!(macros.carbs_g, 0.0);
+        assert_eq!(macros.fat_g, 0.0);
+        assert_eq!(macros.fiber_g, 0.0);
     }
 
     #[test]
@@ -800,12 +812,12 @@ mod tests {
             nutrition_data_per: None,
             nutriments: None,
         };
-        let (cal, prot, carb, fat, fib) = extract_off_macros(&product);
-        assert_eq!(cal, 0.0);
-        assert_eq!(prot, 0.0);
-        assert_eq!(carb, 0.0);
-        assert_eq!(fat, 0.0);
-        assert_eq!(fib, 0.0);
+        let macros = extract_off_macros(&product);
+        assert_eq!(macros.calories, 0.0);
+        assert_eq!(macros.protein_g, 0.0);
+        assert_eq!(macros.carbs_g, 0.0);
+        assert_eq!(macros.fat_g, 0.0);
+        assert_eq!(macros.fiber_g, 0.0);
     }
 
     // -- Merge/dedup logic --
