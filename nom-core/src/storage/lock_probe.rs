@@ -40,8 +40,45 @@ pub fn probe_db_lock(path: &Path) -> Result<bool, std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use tempfile::TempDir;
+
+    /// Resolve the path to the `lock_holder` binary built by cargo.
+    fn find_lock_holder() -> std::path::PathBuf {
+        // Build the binary first (may already exist from previous runs)
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| {
+            panic!("CARGO_MANIFEST_DIR not set — run through cargo test")
+        });
+        let status = std::process::Command::new("cargo")
+            .args(["build", "--bin", "lock_holder"])
+            .current_dir(&manifest_dir)
+            .status()
+            .expect("failed to run cargo build");
+        if !status.success() {
+            panic!("cargo build --bin lock_holder failed");
+        }
+
+        // Determine the target directory — for workspaces this is the workspace root
+        let target_dir = std::env::var("CARGO_TARGET_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                // Walk up from manifest_dir to find where the binary actually lives
+                let mut dir = std::path::PathBuf::from(&manifest_dir);
+                while let Some(parent) = dir.parent() {
+                    let candidate = parent.join("target");
+                    if candidate.join("debug").join("lock_holder").exists() {
+                        return candidate;
+                    }
+                    dir = parent.to_path_buf();
+                }
+                // Default fallback
+                std::path::PathBuf::from(&manifest_dir).join("target")
+            });
+        let bin_path = target_dir.join("debug").join("lock_holder");
+        if bin_path.exists() {
+            return bin_path;
+        }
+        panic!("could not find lock_holder binary at {:?}", bin_path);
+    }
 
     #[test]
     fn test_probe_unlocked_file() {
@@ -66,6 +103,9 @@ mod tests {
     /// Spawn a child process that holds a write lock on a temp file, then
     /// verify the probe detects it. After the child exits, verify the lock
     /// is released.
+    ///
+    /// Uses the dedicated `lock_holder` binary — no external `rustc` needed,
+    /// no ad-hoc compilation. Fails loudly if the helper cannot be spawned.
     #[test]
     fn test_probe_locked_file() {
         let dir = TempDir::new().unwrap();
@@ -73,65 +113,34 @@ mod tests {
         // Create the file first so the child can open it
         std::fs::File::create(&path).unwrap();
 
-        // Build a small helper program inline via a temporary Rust source file
         let path_str = path.to_string_lossy().to_string();
-        let helper_src = [
-            "use std::os::unix::io::{FromRawFd, RawFd};",
-            "fn main() {",
-            &format!("    let path = \"{}\";", path_str),
-            "    let fd = unsafe { libc::open(path.as_bytes().as_ptr() as *const _, libc::O_RDWR) };",
-            "    if fd < 0 { panic!(\"failed to open\") }",
-            "    let mut flock = libc::flock {",
-            "        l_type: libc::F_WRLCK as i16,",
-            "        l_whence: libc::SEEK_SET as i16,",
-            "        l_start: 0,",
-            "        l_len: 0,",
-            "        l_pid: 0,",
-            "    };",
-            "    unsafe { libc::fcntl(fd, libc::F_SETLKW, &mut flock); }",
-            "    std::thread::sleep(std::time::Duration::from_secs(30));",
-            "}",
-        ].join("\n");
+        let helper_path = find_lock_holder();
 
-        let helper_dir = TempDir::new().unwrap();
-        let src_path = helper_dir.path().join("helper.rs");
-        std::fs::File::create(&src_path)
-            .unwrap()
-            .write_all(helper_src.as_bytes())
-            .unwrap();
-
-        // Compile the helper
-        let rustc = std::process::Command::new("rustc")
-            .arg(&src_path)
-            .arg("-o")
-            .arg(helper_dir.path().join("helper"))
-            .output()
-            .expect("rustc should run");
-
-        if !rustc.status.success() {
-            // If rustc isn't available or fails, skip this test gracefully
-            eprintln!(
-                "skipping locked-file test (rustc unavailable): {}",
-                String::from_utf8_lossy(&rustc.stderr)
-            );
-            return;
-        }
-
-        // Spawn the helper — it will hold the lock
-        let mut child = std::process::Command::new(helper_dir.path().join("helper"))
+        // Spawn the lock_holder binary
+        let mut child = std::process::Command::new(&helper_path)
+            .env("NOM_HOLD_LOCK_PATH", &path_str)
             .spawn()
-            .expect("spawn helper");
+            .unwrap_or_else(|e| panic!("failed to spawn lock_holder: {}", e));
 
-        // Give it a moment to acquire the lock
+        // Give the child time to start up and acquire the lock
         std::thread::sleep(std::time::Duration::from_millis(200));
+
+        // Verify child is still running (it should be sleeping)
+        match child.try_wait() {
+            Ok(Some(status)) => panic!(
+                "child exited prematurely with status {:?} — lock setup failed", status
+            ),
+            Err(e) => panic!("try_wait failed: {}", e),
+            Ok(None) => {}, // child still running, good
+        }
 
         // Probe should detect the lock
         let is_locked = probe_db_lock(&path).expect("probe should succeed");
         assert!(is_locked, "probe should detect child's write lock");
 
         // Kill the child and verify lock is released
-        child.kill().ok();
-        child.wait().ok();
+        child.kill().expect("kill child");
+        child.wait().expect("wait for child");
         std::thread::sleep(std::time::Duration::from_millis(100));
 
         let is_locked = probe_db_lock(&path).expect("probe after child exit");

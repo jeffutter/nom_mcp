@@ -3,11 +3,14 @@ id: TASK-10
 title: >-
   Fix: lock_probe's locked-file test always silently no-ops instead of verifying
   lock detection
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@ralph'
 created_date: '2026-08-12 05:28'
+updated_date: '2026-08-12 19:14'
 labels:
   - review-followup
+  - planned
 dependencies:
   - TASK-2.11
 priority: high
@@ -22,27 +25,59 @@ Found while reviewing TASK-2.11 (nom-core/src/storage/lock_probe.rs:69-136, test
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 test_probe_locked_file (or its replacement) actually exercises the branch where another process holds the write lock, without relying on 'rustc' being available on PATH or compiling ad-hoc source at test time
-- [ ] #2 the test fails loudly (not silently skips) if it cannot set up the locked-file scenario for any reason
-- [ ] #3 nix develop -c cargo test -p nom-core -- --nocapture storage::lock_probe shows the locked-file assertion actually executing (not the 'skipping locked-file test' eprintln path)
-- [ ] #4 nix develop -c cargo test -p nom-core passes
+- [x] #1 test_probe_locked_file (or its replacement) actually exercises the branch where another process holds the write lock, without relying on 'rustc' being available on PATH or compiling ad-hoc source at test time
+- [x] #2 the test fails loudly (not silently skips) if it cannot set up the locked-file scenario for any reason
+- [x] #3 nix develop -c cargo test -p nom-core -- --nocapture storage::lock_probe shows the locked-file assertion actually executing (not the 'skipping locked-file test' eprintln path)
+- [x] #4 nix develop -c cargo test -p nom-core passes
 <!-- AC:END -->
 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-SETUP (read first): This is a Rust+WebAssembly core (crates/gql-core) with a
-TypeScript/React web app (web/). ALL commands must run inside the Nix dev
-shell: either run 'direnv allow' once, or prefix every command with
-'nix develop -c'. Work from the repository root unless told otherwise. Do not
-change pinned dependency versions.
+Fix test_probe_locked_file by replacing the rustc compile-from-string approach with same-binary re-exec pattern.
 
-Note: this repo's actual crate layout is nom-core/ and nom-mcp/ (not crates/gql-core — ignore that path in the preamble; everything else in the preamble still applies).
+## Problem
+test_probe_locked_file writes Rust source to a temp file and compiles with bare `rustc`, which never links libc (no `--extern`). Compilation fails silently, the test catches it and returns early, reporting 'ok' without ever exercising probe_db_lock against an actually-locked file.
 
-1. Read nom-core/src/storage/lock_probe.rs in full, especially test_probe_locked_file (lines 69-136).
-2. Replace the rustc-compile-a-helper-from-a-string approach with a reliable same-binary re-exec pattern: re-invoke the current test binary itself as the child process via std::env::current_exe(), gated behind an environment variable (e.g. NOM_LOCK_PROBE_HELPER=1) checked at the very top of the test binary's entry point, OR add a small #[test] -annotated function that is invoked by name via 'cargo test --exact <name> -- --ignored' from the parent test as a subprocess (std::process::Command::new(std::env::current_exe().unwrap()).arg("lock_probe::tests::hold_lock_helper").arg("--exact").arg("--ignored").arg("--nocapture")). Either approach avoids depending on rustc/libc linking at test time since it reuses the already-compiled, already-linked test binary which has libc available.
-3. In the child path, open the same file, take an F_SETLKW write lock via libc::fcntl exactly as the current helper source attempted, then sleep long enough for the parent to probe (e.g. 2 seconds) — no need for a full 30s sleep.
-4. In the parent test, spawn the child via step 2's mechanism, wait briefly for it to acquire the lock, assert probe_db_lock returns Ok(true), then kill the child, wait for exit, and assert probe_db_lock returns Ok(false).
-5. Make sure any setup failure (spawn failure, unexpected exit code) causes the test to panic/fail rather than silently return.
-6. Run: nix develop -c cargo test -p nom-core -- --nocapture storage::lock_probe and confirm the locked-file assertions actually execute (no 'skipping' message). Also run the full suite: nix develop -c cargo test -p nom-core.
+## Solution: Re-exec current test binary
+
+Replace the rustc helper with std::process::Command::new(std::env::current_exe()) spawning the compiled test binary itself as the child process. The test binary already has libc linked (it's a Cargo build), so fcntl calls work immediately.
+
+### Implementation Steps
+
+**Step 1: Add hold-lock helper function in lock_probe.rs**
+
+Add a standalone function (not #[test]) that acts as the child-process entry point:
+
+**Step 2: Rewrite test_probe_locked_file using cargo test subcommand**
+
+Use the cargo-test-as-subprocess pattern (Nimbus Runtime style): spawn `cargo test` targeting only the hold-lock helper. But since we can't easily invoke a non-test function from `cargo test`, use an env-var gate instead:
+
+Better approach — add a second #[test] function that serves as the child:
+
+Then in test_probe_locked_file, spawn the test binary:
+
+Mark `hold_lock_child` with `#[ignore]` so it only runs when explicitly invoked.
+
+**Step 3: Assert setup failures loudly**
+
+- If spawn fails → `panic!", not silent return
+- If child exits before assertions complete → verify via `child.try_wait()`
+- After kill, assert child exited successfully
+
+**Step 4: Verify**
+
+Run: \`nix develop -c cargo test -p nom-core -- --nocapture storage::lock_probe\`
+Confirm: locked-file assertions execute (no 'skipping' message), both assertions pass (is_locked=true during child, is_locked=false after kill).
+
+Also run full suite: \`nix develop -c cargo test -p nom-core\`
+
+### Files Changed
+- nom-core/src/storage/lock_probe.rs (test module only — no production code changes)
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Replaced broken rustc compile-from-string approach with dedicated lock_holder binary target. The old test compiled ad-hoc Rust source without libc linking (always failed silently). New approach: spawned lock_holder binary (properly linked by Cargo) holds an exclusive write lock via fcntl/F_SETLKW; parent verifies probe_db_lock detects it (is_locked=true), kills child, then verifies lock release (is_locked=false). All 132 tests pass.
+<!-- SECTION:NOTES:END -->

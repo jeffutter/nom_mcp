@@ -29,6 +29,11 @@ libc = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+[[bin]]
+name = "lock_holder"
+path = "src/lock_holder.rs"
+required-features = []
+
 [dev-dependencies]
 serial_test = "3"
 tempfile = "3"
