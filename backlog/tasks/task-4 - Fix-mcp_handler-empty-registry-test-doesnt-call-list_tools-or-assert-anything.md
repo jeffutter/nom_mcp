@@ -20,7 +20,7 @@ ordinal: 110
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Found while reviewing TASK-2.7 (nom-core/src/operation/mcp_handler.rs, test_empty_registry_list_tools in the #[cfg(test)] mod). The test constructs an McpHandler over an empty OperationRegistry and then does 'let _ = handler;' — it never calls list_tools() and asserts nothing, so it exercises no behavior and would pass even if list_tools() panicked or returned garbage on an empty registry. This is a Correct-axis gap: the empty-registry edge case named by the test's own title is untested.
+Found while reviewing TASK-2.7 (nom-core/src/operation/mcp_handler.rs, test_empty_registry_list_tools in the #[cfg(test)] mod). The test constructs an McpHandler over an empty OperationRegistry and then does 'let_ = handler;' — it never calls list_tools() and asserts nothing, so it exercises no behavior and would pass even if list_tools() panicked or returned garbage on an empty registry. This is a Correct-axis gap: the empty-registry edge case named by the test's own title is untested.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -41,7 +41,7 @@ Note: this repo's actual layout is nom-core/ (library) and nom-mcp/ (binaries), 
    fn test_empty_registry_list_tools() {
        let handler = McpHandler::new(OperationRegistry::new());
        // The handler should work even with an empty registry
-       let _ = handler;
+       let_ = handler;
    }
 
 2. Rewrite it as a #[tokio::test] (list_tools is async) that actually calls list_tools() and asserts on the result. You will need a RequestContext<RoleServer> to call list_tools() — check how nom-core's own rmcp dependency version constructs one for tests (search the rmcp crate docs/source under the pinned version in Cargo.lock, or check if rmcp exposes a test-friendly constructor); if none is available, cast a narrower net and instead unit-test the registry-iteration logic that list_tools() delegates to (e.g. by extracting the tool-building loop into a small helper function that doesn't need a RequestContext, and testing that helper directly against an empty registry). Prefer testing the real public method if it is reasonably constructible; fall back to the helper-extraction approach only if the RequestContext cannot be constructed in a unit test.

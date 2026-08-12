@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@ralph'
 created_date: '2026-08-11 23:54'
-updated_date: '2026-08-11 23:58'
+updated_date: '2026-08-11 23:59'
 labels:
   - review-followup
 dependencies:
@@ -23,17 +23,13 @@ Found while reviewing TASK-2.6 (.github/workflows/ci.yml), TASK-3, and TASK-4. T
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 nix develop -c cargo fmt --all --check exits 0 with no diffs
-- [ ] #2 nix develop -c cargo test --workspace passes
-- [ ] #3 nix develop -c cargo clippy --all-targets --all-features --workspace -- -D warnings passes
+- [ ] #1 #1 nix develop -c cargo fmt --all --check exits 0 with no diffs: Done|#2 nix develop -c cargo test --workspace passes: Done|#3 nix develop -c cargo clippy --all-targets --all-features --workspace -- -D warnings passes: Done
 <!-- AC:END -->
 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-SETUP (read first): This is a Rust+WebAssembly core (crates/gql-core) with a TypeScript/React web app (web/). ALL commands must run inside the Nix dev shell: either run 'direnv allow' once, or prefix every command with 'nix develop -c'. Work from the repository root unless told otherwise. Do not change pinned dependency versions.
-
-Note: this repo's actual layout is nom-core/ (library) and nom-mcp/ (binaries), not crates/gql-core / web/ — use nom-core/ and nom-mcp/ for all paths below.
+SETUP (read first): This is a Rust Cargo workspace with two crates: nom-core/ (library) and nom-mcp/ (binaries). ALL commands must run inside the Nix dev shell: either run 'direnv allow' once, or prefix every command with 'nix develop -c'. Work from the repository root unless told otherwise. Do not change pinned dependency versions.
 
 1. Run: nix develop -c cargo fmt --all --check   to see the current full diff (files: nom-core/src/client/off.rs, nom-core/src/operation/cli_router.rs, nom-core/src/operation/http_router.rs, nom-core/src/operation/registry.rs, and any others reported).
 2. Run: nix develop -c cargo fmt --all   to apply rustfmt's fixes. This is purely mechanical formatting — do not hand-edit logic while doing this.
@@ -42,3 +38,15 @@ Note: this repo's actual layout is nom-core/ (library) and nom-mcp/ (binaries), 
 5. Run: nix develop -c cargo clippy --all-targets --all-features --workspace -- -D warnings   and confirm it stays clean.
 6. Commit the formatting-only diff.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Applied cargo fmt --all to fix formatting in 4 files (off.rs, cli_router.rs, http_router.rs, registry.rs). All 70 tests pass, clippy is clean.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Ran cargo fmt --all to fix formatting in 4 source files, resolving the rustfmt CI check that would fail on every push/PR. All acceptance criteria met: fmt check passes (exit 0), all 70 tests pass, clippy is clean with no warnings.
+<!-- SECTION:FINAL_SUMMARY:END -->

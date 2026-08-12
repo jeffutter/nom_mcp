@@ -18,7 +18,7 @@ ordinal: 120
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Found while reviewing TASK-2.4 (nom-core/src/logging.rs, test_init_server_returns_ok and test_init_cli_returns_ok). Both tests call the respective init_*() function and immediately discard the Result with 'let _ = result;', so they assert nothing about the two behaviors the task's acceptance criteria actually require: AC #1 (server defaults to info, CLI defaults to warn) and AC #2 (RUST_LOG overrides the default). The task's own Implementation Notes admit these were only verified manually ('RUST_LOG=debug cargo run ... produces debug-level output') rather than via an automated test. Because tracing_subscriber::fmt().try_init() can only succeed once per process (subsequent calls return Err since the global subscriber is already set), the two existing tests can't just add an assert_eq!(result, Ok(())) — the fix needs a way to inspect the configured filter/level without depending on global-subscriber install order.
+Found while reviewing TASK-2.4 (nom-core/src/logging.rs, test_init_server_returns_ok and test_init_cli_returns_ok). Both tests call the respective init_*() function and immediately discard the Result with 'let_ = result;', so they assert nothing about the two behaviors the task's acceptance criteria actually require: AC #1 (server defaults to info, CLI defaults to warn) and AC #2 (RUST_LOG overrides the default). The task's own Implementation Notes admit these were only verified manually ('RUST_LOG=debug cargo run ... produces debug-level output') rather than via an automated test. Because tracing_subscriber::fmt().try_init() can only succeed once per process (subsequent calls return Err since the global subscriber is already set), the two existing tests can't just add an assert_eq!(result, Ok(())) — the fix needs a way to inspect the configured filter/level without depending on global-subscriber install order.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -31,7 +31,7 @@ Found while reviewing TASK-2.4 (nom-core/src/logging.rs, test_init_server_return
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-SETUP (read first): This is a Rust+WebAssembly core (crates/gql-core) with a TypeScript/React web app (web/). ALL commands must run inside the Nix dev shell: either run 'direnv allow' once, or prefix every command with 'nix develop -c'. Work from the repository root unless told otherwise. Do not change pinned dependency versions.
+SETUP (read first): This is a Rust Cargo workspace with two crates: nom-core/ (library) and nom-mcp/ (binaries). ALL commands must run inside the Nix dev shell: either run 'direnv allow' once, or prefix every command with 'nix develop -c'. Work from the repository root unless told otherwise. Do not change pinned dependency versions.
 
 Note: this repo's actual layout is nom-core/ (library) and nom-mcp/ (binaries), not crates/gql-core / web/ — use nom-core/ for all paths below.
 
