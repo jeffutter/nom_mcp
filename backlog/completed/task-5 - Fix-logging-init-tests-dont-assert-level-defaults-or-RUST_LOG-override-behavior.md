@@ -7,7 +7,7 @@ status: Done
 assignee:
   - '@ralph'
 created_date: '2026-08-11 23:16'
-updated_date: '2026-08-12 04:28'
+updated_date: '2026-08-12 04:29'
 labels:
   - review-followup
   - planned
@@ -56,4 +56,12 @@ This is a single-file change (nom-core/src/logging.rs). No sub-tickets needed.
 
 <!-- SECTION:NOTES:BEGIN -->
 Extracted pub(crate) fn build_filter(default_level) -> EnvFilter from init_server()/init_cli(). Both init functions now delegate filter creation to this helper. Replaced two no-op tests with three assertion-based tests: test_build_filter_server_default (asserts 'info' in filter string), test_build_filter_cli_default (asserts 'warn'), test_rust_log_override (sets RUST_LOG=error, asserts override). Used #[serial_test::serial] on the RUST_LOG test since env vars are process-global. All 113 nom-core tests pass.
+
+Fixup applied post-review: ran cargo fmt on logging.rs (repo-wide `cargo fmt --check` was failing, same class of issue as TASK-6).
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Extracted pub(crate) fn build_filter(default_level) -> EnvFilter helper from init_server()/init_cli(). Both init functions now delegate filter creation to this shared helper. Replaced two no-op tests (test_init_server_returns_ok, test_init_cli_returns_ok) with three assertion-based tests: test_build_filter_server_default verifies INFO default, test_build_filter_cli_default verifies WARN default, test_rust_log_override confirms RUST_LOG environment variable overrides defaults. All 113 nom-core tests pass.
+<!-- SECTION:FINAL_SUMMARY:END -->

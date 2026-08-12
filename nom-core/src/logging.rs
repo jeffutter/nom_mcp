@@ -53,7 +53,11 @@ mod tests {
         unsafe { std::env::remove_var("RUST_LOG") };
         let filter = build_filter(tracing::Level::INFO);
         let s = format!("{}", filter);
-        assert!(s.contains("info"), "server default filter should contain 'info', got: {}", s);
+        assert!(
+            s.contains("info"),
+            "server default filter should contain 'info', got: {}",
+            s
+        );
     }
 
     #[test]
@@ -61,7 +65,11 @@ mod tests {
         unsafe { std::env::remove_var("RUST_LOG") };
         let filter = build_filter(tracing::Level::WARN);
         let s = format!("{}", filter);
-        assert!(s.contains("warn"), "cli default filter should contain 'warn', got: {}", s);
+        assert!(
+            s.contains("warn"),
+            "cli default filter should contain 'warn', got: {}",
+            s
+        );
     }
 
     #[serial_test::serial]
@@ -70,8 +78,16 @@ mod tests {
         unsafe { std::env::set_var("RUST_LOG", "error") };
         let filter = build_filter(tracing::Level::INFO);
         let s = format!("{}", filter);
-        assert!(s.contains("error"), "RUST_LOG=error should override default, got: {}", s);
-        assert!(!s.contains("info"), "override should not contain default info, got: {}", s);
+        assert!(
+            s.contains("error"),
+            "RUST_LOG=error should override default, got: {}",
+            s
+        );
+        assert!(
+            !s.contains("info"),
+            "override should not contain default info, got: {}",
+            s
+        );
         unsafe { std::env::remove_var("RUST_LOG") };
     }
 }
