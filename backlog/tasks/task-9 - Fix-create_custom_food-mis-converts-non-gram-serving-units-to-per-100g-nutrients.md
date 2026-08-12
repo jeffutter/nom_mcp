@@ -3,11 +3,14 @@ id: TASK-9
 title: >-
   Fix: create_custom_food mis-converts non-gram serving units to per-100g
   nutrients
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@ralph'
 created_date: '2026-08-12 05:27'
+updated_date: '2026-08-12 18:58'
 labels:
   - review-followup
+  - planned
 dependencies:
   - TASK-2.13
 priority: high
@@ -22,25 +25,72 @@ Found while reviewing TASK-2.13 (nom-core/src/food/mod.rs:645, convert_to_per_10
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 create_custom_food either rejects non-gram serving_size.unit values with a clear validation error, or correctly converts the given quantity+unit into a gram-equivalent before calling convert_to_per_100g (document which approach was chosen and why in the task's Implementation Notes)
-- [ ] #2 a test asserts the actual calories_per_100g/protein_g_per_100g/etc. numeric output for a non-gram serving is correct (or that the request is rejected), not just that serving_size_g is null in the response
-- [ ] #3 nix develop -c cargo test -p nom-core passes
+- [x] #1 create_custom_food either rejects non-gram serving_size.unit values with a clear validation error, or correctly converts the given quantity+unit into a gram-equivalent before calling convert_to_per_100g (document which approach was chosen and why in the task's Implementation Notes)
+- [x] #2 a test asserts the actual calories_per_100g/protein_g_per_100g/etc. numeric output for a non-gram serving is correct (or that the request is rejected), not just that serving_size_g is null in the response
+- [x] #3 nix develop -c cargo test -p nom-core passes
 <!-- AC:END -->
 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-SETUP (read first): This is a Rust+WebAssembly core (crates/gql-core) with a
-TypeScript/React web app (web/). ALL commands must run inside the Nix dev
-shell: either run 'direnv allow' once, or prefix every command with
-'nix develop -c'. Work from the repository root unless told otherwise. Do not
-change pinned dependency versions.
+## Fix Approach: Reject Non-Gram Units (Validation Error)
 
-Note: this repo's actual crate layout is nom-core/ and nom-mcp/ (not crates/gql-core — ignore that path in the preamble, it does not apply to this project; everything else in the preamble still applies).
+**Chosen approach:** Reject any `serving_size.unit` that is not a recognized gram unit with `ErrorData::validation`. Volume-to-weight conversion requires ingredient-specific density tables (1 cup flour ~120g vs 1 cup water ~237g), which v1 has no data source for. Industry apps (MyFitnessPal, etc.) do not auto-convert household measures.
 
-1. Read nom-core/src/food/mod.rs end to end, specifically: ServingSize struct (~line 555), convert_to_per_100g (~line 57), and CreateCustomFood::execute_json (~line 611-684).
-2. Decide the fix scope: the simplest correct fix is to reject any serving_size.unit that is not a recognized gram-equivalent unit (grams/gram/g) with ErrorData::validation, since there is no unit-conversion table in scope for this project yet (see doc-5 for whether grams-only was actually intended — if doc-5 explicitly calls for supporting 'cups'/'pieces' as informational-only units with the numeric quantity representing something other than a gram-convertible amount, then instead: only ever pass a gram-based serving_size_g into convert_to_per_100g when unit is grams/gram, and for all other units, store the nutrients as given per-serving without per-100g conversion — i.e. do NOT call convert_to_per_100g at all for non-gram units, and represent that clearly in the stored/returned FoodCandidate, coordinating with how search_food consumes these rows). Pick the rejection approach unless doc-5 clearly requires non-gram units to be accepted and converted.
-3. Implement the chosen fix in CreateCustomFoodRequest validation / execute_json.
-4. Fix nom-core/src/food/mod.rs:1152 test_create_custom_food_non_gram_unit — either change it to assert the request is rejected (if you chose rejection) or to assert the mathematically correct converted per-100g values (if you chose gram-equivalent conversion). Remove the comment that currently excuses the wrong math.
-5. Run: nix develop -c cargo test -p nom-core (and nix develop -c cargo clippy --workspace --all-targets, nix develop -c cargo fmt --check).
+### Step 1: Add Unit Validation in execute_json
+
+In `CreateCustomFood::execute_json` (~line 620), immediately after deserializing the request, add validation that rejects non-gram units. Place this right after the existing quantity > 0 check (~line 623):
+
+```rust
+// Validate serving size unit — only grams accepted
+let unit_lower = req.serving_size.unit.to_lowercase();
+if unit_lower != "grams" && unit_lower != "gram" && unit_lower != "g" {
+    return Err(ErrorData::validation(
+        "serving_size.unit",
+        format!(
+            "only gram-based units are supported (got '{}'); volume units like cups/pieces cannot be converted without ingredient-specific density data",
+            req.serving_size.unit
+        ),
+    ));
+}
+```
+
+### Step 2: Simplify effective_serving_size Logic
+
+After validation guarantees only gram units reach the conversion step, the conditional at lines ~648-653 (`if unit == grams...`) becomes redundant. The `serving_size_g` variable now correctly represents grams. Keep the block for documentation clarity, or simplify to `Some(serving_size_g)`.
+
+### Step 3: Fix test_create_custom_food_non_gram_unit
+
+Replace the existing test (`nom-core/src/food/mod.rs:1152`) to assert rejection instead of silently accepting corrupted data. Remove the misleading comment that said "but that is mathematically correct per the formula."
+
+New test asserts:
+- Error category is Validation
+- Error field is "serving_size.unit"
+- Error reason mentions the invalid unit
+
+### Step 4: Add Positive Test for Gram Aliases
+
+Add a test that verifies `"g"` and `"gram"` are accepted (not just `"grams"`). Iterates over all three aliases, confirms each produces correct per-100g conversion and stores `serving_size_g`.
+
+### Step 5: Run Quality Checks
+
+```bash
+nix develop -c cargo test -p nom-core
+nix develop -c cargo clippy --workspace --all-targets
+nix develop -c cargo fmt --check
+```
+
+### Files Modified
+- `nom-core/src/food/mod.rs` — validation logic + test fixes (~20 lines net change)
+
+### Risk Assessment
+- **Breaking change?** Yes — callers using non-gram units will get validation errors instead of silently wrong data. This is the correct behavior; previously the data was corrupted.
+- **Downstream impact:** search_food reads from foods table — existing corrupted rows remain but new ones won't be created. No migration needed.
+- **Performance:** No impact — adds one string comparison.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Chosen approach: reject non-gram serving_size.unit values with validation error. Volume-to-weight conversion requires ingredient-specific density tables (1 cup flour ~120g vs 1 cup water ~237g), which v1 has no data source for. Added unit validation in execute_json that accepts only 'grams', 'gram', 'g'. Simplified effective_serving_size logic since only gram units pass validation — always stores Some(serving_size_g). Fixed test to assert rejection instead of accepting corrupted data. Added positive test for gram aliases.
+<!-- SECTION:NOTES:END -->

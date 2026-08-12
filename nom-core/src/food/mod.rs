@@ -620,6 +620,19 @@ impl Operation for CreateCustomFood {
             ));
         }
 
+        // Only gram-based units are accepted. Volume/piece units require
+        // ingredient-specific density data that v1 has no source for.
+        let unit_lower = req.serving_size.unit.to_lowercase();
+        if unit_lower != "grams" && unit_lower != "gram" && unit_lower != "g" {
+            return Err(ErrorData::validation(
+                "serving_size.unit",
+                format!(
+                    "only gram-based units are supported (got '{}'); volume units like cups or pieces cannot be converted without ingredient-specific density data",
+                    req.serving_size.unit
+                ),
+            ));
+        }
+
         #[cfg(test)]
         let conn = if let Some(ref path) = self.db_path {
             Connection::open_at(path)
@@ -637,21 +650,13 @@ impl Operation for CreateCustomFood {
             .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?;
 
         // Convert per-serving nutrients to per-100g
+        // Unit is already validated as gram-based above
         let serving_size_g = req.serving_size.quantity;
         let calories = convert_to_per_100g(req.nutrients.calories, serving_size_g);
         let protein = convert_to_per_100g(req.nutrients.protein_g, serving_size_g);
         let carbs = convert_to_per_100g(req.nutrients.carbs_g, serving_size_g);
         let fat = convert_to_per_100g(req.nutrients.fat_g, serving_size_g);
         let fiber = convert_to_per_100g(req.nutrients.fiber_g, serving_size_g);
-
-        // Only store serving_size_g if unit is grams
-        let effective_serving_size = if req.serving_size.unit.to_lowercase() == "grams"
-            || req.serving_size.unit.to_lowercase() == "gram"
-        {
-            Some(serving_size_g)
-        } else {
-            None
-        };
 
         let food_id = insert_custom_food(
             &conn,
@@ -661,7 +666,7 @@ impl Operation for CreateCustomFood {
             carbs,
             fat,
             fiber,
-            effective_serving_size,
+            Some(serving_size_g),
         )
         .await?;
 
@@ -674,7 +679,7 @@ impl Operation for CreateCustomFood {
             carbs_g_per_100g: carbs,
             fat_g_per_100g: fat,
             fiber_g_per_100g: fiber,
-            serving_size_g: effective_serving_size,
+            serving_size_g: Some(serving_size_g),
         }))
     }
 }
@@ -1134,11 +1139,11 @@ mod tests {
 
     #[serial_test::serial]
     #[tokio::test]
-    async fn test_create_custom_food_non_gram_unit() {
+    async fn test_create_custom_food_rejects_non_gram_unit() {
         let db = TempDb::new().await;
 
         let op = CreateCustomFood::new().with_db_path(db.path.clone());
-        let result = op
+        let err = op
             .execute_json(Arc::new(serde_json::json!({
                 "name": "Cup of Soup",
                 "serving_size": {"quantity": 1.0, "unit": "cups"},
@@ -1151,13 +1156,44 @@ mod tests {
                 }
             })))
             .await
-            .unwrap();
+            .unwrap_err();
 
-        // With 1 cup = 1.0 quantity, per-100g = 100 * 100 / 1 = 10000... but that's
-        // mathematically correct per the formula. The key point is serving_size_g
-        // is null for non-gram units.
-        assert!(result["serving_size_g"].is_null());
-        assert_eq!(result["source"], "Custom");
+        assert_eq!(err.category, crate::error::ErrorCategory::Validation);
+        assert_eq!(err.field.as_deref(), Some("serving_size.unit"));
+        assert!(
+            err.reason
+                .as_ref()
+                .map(|r| r.contains("cups"))
+                .unwrap_or(false)
+        );
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_create_custom_food_accepts_gram_aliases() {
+        let db = TempDb::new().await;
+
+        for unit_alias in ["grams", "gram", "g"] {
+            let op = CreateCustomFood::new().with_db_path(db.path.clone());
+            let result = op
+                .execute_json(Arc::new(serde_json::json!({
+                    "name": format!("Test {}", unit_alias),
+                    "serving_size": {"quantity": 200.0, "unit": unit_alias},
+                    "nutrients": {
+                        "calories": 400.0,
+                        "protein_g": 15.0,
+                        "carbs_g": 60.0,
+                        "fat_g": 8.0,
+                        "fiber_g": 3.0
+                    }
+                })))
+                .await
+                .unwrap();
+
+            // Verify per-100g conversion: 400 cal / 200g * 100 = 200 cal/100g
+            assert_eq!(result["calories_per_100g"], 200.0);
+            assert_eq!(result["serving_size_g"], 200.0);
+        }
     }
 
     #[serial_test::serial]
