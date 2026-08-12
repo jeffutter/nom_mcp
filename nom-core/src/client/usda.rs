@@ -239,6 +239,24 @@ impl std::fmt::Debug for FdcClient {
     }
 }
 
+/// Classifies a response's HTTP status, consuming the body into the error
+/// message on failure. Returns the untouched response on success so callers
+/// can still read headers/JSON from it.
+async fn check_status(resp: reqwest::Response) -> Result<reqwest::Response, FdcError> {
+    let status = resp.status();
+    if status == 429 {
+        return Err(FdcError::RateLimited);
+    }
+    if !status.is_success() {
+        let message = resp.text().await.unwrap_or_default();
+        return Err(FdcError::ApiError {
+            status: status.as_u16(),
+            message,
+        });
+    }
+    Ok(resp)
+}
+
 impl FdcClient {
     /// Create a new FDC client pointing at the given base URL.
     pub fn new(base_url: &str, api_key: &str) -> Result<Self, FdcError> {
@@ -286,18 +304,7 @@ impl FdcClient {
             .send()
             .await?;
 
-        let status = resp.status();
-        if status == 429 {
-            return Err(FdcError::RateLimited);
-        }
-
-        if !status.is_success() {
-            let message = resp.text().await.unwrap_or_default();
-            return Err(FdcError::ApiError {
-                status: status.as_u16(),
-                message,
-            });
-        }
+        let resp = check_status(resp).await?;
 
         let rate_remaining = resp
             .headers()
@@ -339,26 +346,14 @@ impl FdcClient {
             .send()
             .await?;
 
-        let status = resp.status();
-        if status == 429 {
-            return Err(FdcError::RateLimited);
-        }
-
-        if status == 404 {
+        if resp.status() == 404 {
             return Err(FdcError::ApiError {
                 status: 404,
                 message: format!("food not found (fdcId={})", fdc_id),
             });
         }
 
-        if !status.is_success() {
-            let message = resp.text().await.unwrap_or_default();
-            return Err(FdcError::ApiError {
-                status: status.as_u16(),
-                message,
-            });
-        }
-
+        let resp = check_status(resp).await?;
         Ok(resp.json().await?)
     }
 
@@ -392,19 +387,7 @@ impl FdcClient {
                 .send()
                 .await?;
 
-            let status = resp.status();
-            if status == 429 {
-                return Err(FdcError::RateLimited);
-            }
-
-            if !status.is_success() {
-                let message = resp.text().await.unwrap_or_default();
-                return Err(FdcError::ApiError {
-                    status: status.as_u16(),
-                    message,
-                });
-            }
-
+            let resp = check_status(resp).await?;
             let batch: FdcBatchResponse = resp.json().await?;
             all_foods.extend(batch.foods);
         }
