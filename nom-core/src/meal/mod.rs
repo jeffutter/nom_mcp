@@ -1345,64 +1345,22 @@ impl Operation for SearchMeals {
             .await
             .map_err(|e| ErrorData::storage_failure(format!("prepare failed: {e}")))?;
 
-        // Execute with dynamic param count
-        let meal_ids: Vec<i64> = match params.len() {
-            1 => {
-                let mut rows = stmt
-                    .query((params[0].as_str(),))
-                    .await
-                    .map_err(|e| ErrorData::storage_failure(format!("query failed: {e}")))?;
-                let mut ids = Vec::new();
-                while let Some(row) = rows
-                    .next()
-                    .await
-                    .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
-                {
-                    ids.push(
-                        row.get::<i64>(0)
-                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-                    );
-                }
-                ids
-            }
-            2 => {
-                let mut rows = stmt
-                    .query((params[0].as_str(), params[1].as_str()))
-                    .await
-                    .map_err(|e| ErrorData::storage_failure(format!("query failed: {e}")))?;
-                let mut ids = Vec::new();
-                while let Some(row) = rows
-                    .next()
-                    .await
-                    .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
-                {
-                    ids.push(
-                        row.get::<i64>(0)
-                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-                    );
-                }
-                ids
-            }
-            3 => {
-                let mut rows = stmt
-                    .query((params[0].as_str(), params[1].as_str(), params[2].as_str()))
-                    .await
-                    .map_err(|e| ErrorData::storage_failure(format!("query failed: {e}")))?;
-                let mut ids = Vec::new();
-                while let Some(row) = rows
-                    .next()
-                    .await
-                    .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
-                {
-                    ids.push(
-                        row.get::<i64>(0)
-                            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-                    );
-                }
-                ids
-            }
-            _ => unreachable!(),
-        };
+        // Execute with dynamic param count — turso's Vec<T: IntoValue> implements IntoParams
+        let mut rows = stmt
+            .query(params)
+            .await
+            .map_err(|e| ErrorData::storage_failure(format!("query failed: {e}")))?;
+        let mut meal_ids = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
+        {
+            meal_ids.push(
+                row.get::<i64>(0)
+                    .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+            );
+        }
 
         let mut summaries = Vec::new();
         for id in meal_ids {
