@@ -30,11 +30,7 @@ pub mod nutrients {
 }
 
 /// Data types we query — excludes Branded.
-const DATA_TYPES: &[&str] = &[
-    "Foundation",
-    "SR Legacy",
-    "Survey (FNDDS)",
-];
+const DATA_TYPES: &[&str] = &["Foundation", "SR Legacy", "Survey (FNDDS)"];
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -175,7 +171,9 @@ impl FdcFoodDetailResponse {
         for n in &self.food_nutrients {
             let Some(info) = &n.nutrient else { continue };
             let Some(id) = info.number else { continue };
-            let Some(unit) = &info.unit_name else { continue };
+            let Some(unit) = &info.unit_name else {
+                continue;
+            };
             let Some(amount) = n.amount else { continue };
 
             match id {
@@ -422,7 +420,7 @@ impl FdcClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::method;
+    use wiremock::matchers::{body_partial_json, method, query_param};
     use wiremock::{Mock, ResponseTemplate};
 
     // -- Serde deserialization tests --
@@ -504,8 +502,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_full_search_response() {
-        let resp: FdcSearchResponse =
-            serde_json::from_str(full_search_response_json()).unwrap();
+        let resp: FdcSearchResponse = serde_json::from_str(full_search_response_json()).unwrap();
         assert_eq!(resp.total_hits, 150);
         assert_eq!(resp.current_page, 1);
         assert_eq!(resp.page_size, 50);
@@ -515,16 +512,12 @@ mod tests {
             resp.food_matches[0].description,
             Some("Chicken Breast, roasted".into())
         );
-        assert_eq!(
-            resp.food_matches[0].data_type,
-            Some("Foundation".into())
-        );
+        assert_eq!(resp.food_matches[0].data_type, Some("Foundation".into()));
     }
 
     #[test]
     fn test_deserialize_minimal_search_response() {
-        let resp: FdcSearchResponse =
-            serde_json::from_str(minimal_search_response_json()).unwrap();
+        let resp: FdcSearchResponse = serde_json::from_str(minimal_search_response_json()).unwrap();
         assert_eq!(resp.food_matches.len(), 0);
         assert_eq!(resp.total_hits, 0);
         assert_eq!(resp.current_page, 0);
@@ -563,8 +556,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_batch_response() {
-        let resp: FdcBatchResponse =
-            serde_json::from_str(batch_response_json()).unwrap();
+        let resp: FdcBatchResponse = serde_json::from_str(batch_response_json()).unwrap();
         assert_eq!(resp.foods.len(), 2);
         assert_eq!(resp.foods[0].fdc_id, 100);
         assert_eq!(resp.foods[1].fdc_id, 200);
@@ -658,7 +650,7 @@ mod tests {
     fn make_search_json(matches: &[&str]) -> serde_json::Value {
         let count = matches.len();
         let food_matches: Vec<serde_json::Value> = matches
-            .into_iter()
+            .iter()
             .enumerate()
             .map(|(i, desc)| {
                 serde_json::json!({
@@ -713,9 +705,13 @@ mod tests {
         let base_url = server.uri();
 
         Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                make_search_json(&["Chicken Breast", "Chicken Thigh"]),
+            .and(body_partial_json(
+                serde_json::json!({"dataType": DATA_TYPES}),
             ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(make_search_json(&["Chicken Breast", "Chicken Thigh"])),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -737,9 +733,9 @@ mod tests {
         let base_url = server.uri();
 
         Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                make_search_json(&["Page 3 Result"]),
-            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(make_search_json(&["Page 3 Result"])),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -791,9 +787,7 @@ mod tests {
         let base_url = server.uri();
 
         Mock::given(method("POST"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(make_batch_json(&[100, 200])),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(make_batch_json(&[100, 200])))
             .expect(1)
             .mount(&server)
             .await;
@@ -819,9 +813,7 @@ mod tests {
 
         // 41 IDs with CHUNK_SIZE=20 produces 2 chunks → at least 2 POST requests
         Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                make_batch_json(&[1, 2, 3]),
-            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(make_batch_json(&[1, 2, 3])))
             .mount(&server)
             .await;
 
@@ -829,7 +821,11 @@ mod tests {
         let ids: Vec<i64> = (1..=41).collect();
         let result = client.get_foods_batch(&ids).await.unwrap();
         // Each chunk returns 3 foods from mock; 2 chunks × 3 = 6 minimum
-        assert!(result.len() >= 6, "expected ≥6 foods from 2+ chunks, got {}", result.len());
+        assert!(
+            result.len() >= 6,
+            "expected ≥6 foods from 2+ chunks, got {}",
+            result.len()
+        );
     }
 
     #[tokio::test]
@@ -854,9 +850,7 @@ mod tests {
         let base_url = server.uri();
 
         Mock::given(method("POST"))
-            .respond_with(
-                ResponseTemplate::new(500).set_body_string("Internal Server Error"),
-            )
+            .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
             .expect(1)
             .mount(&server)
             .await;
@@ -872,16 +866,16 @@ mod tests {
         let base_url = server.uri();
 
         Mock::given(method("GET"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"fdcId": 1})),
-            )
+            .and(query_param("api_key", "secret-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"fdcId": 1})))
             .expect(1)
             .mount(&server)
             .await;
 
         let client = FdcClient::new(&base_url, "secret-key").unwrap();
         client.get_food(1).await.unwrap();
-        // If we reach here, the request was accepted by the mock
+        // Mock only matches when api_key is present as a query param — reaching
+        // here without a wiremock panic confirms it was sent correctly.
     }
 
     #[tokio::test]
