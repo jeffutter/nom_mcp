@@ -93,4 +93,12 @@ nix develop -c cargo fmt --check
 
 <!-- SECTION:NOTES:BEGIN -->
 Chosen approach: reject non-gram serving_size.unit values with validation error. Volume-to-weight conversion requires ingredient-specific density tables (1 cup flour ~120g vs 1 cup water ~237g), which v1 has no data source for. Added unit validation in execute_json that accepts only 'grams', 'gram', 'g'. Simplified effective_serving_size logic since only gram units pass validation — always stores Some(serving_size_g). Fixed test to assert rejection instead of accepting corrupted data. Added positive test for gram aliases.
+
+Fixup applied post-review: ServingSize.unit doc comment and CreateCustomFood description() still advertised/omitted the gram-only restriction added by this ticket, so the tool's own JsonSchema contradicted its validation logic. Updated both to state only gram-equivalent units are accepted.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Rejected non-gram serving_size.unit values with validation error in create_custom_food. Simplified effective_serving_size logic since only gram-based units pass validation. Fixed test to assert rejection instead of accepting corrupted data. Added positive test for gram aliases (grams, gram, g). All 132 tests pass.
+<!-- SECTION:FINAL_SUMMARY:END -->

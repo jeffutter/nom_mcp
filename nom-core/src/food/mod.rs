@@ -552,7 +552,7 @@ struct CreateCustomFoodRequest {
 struct ServingSize {
     /// Numeric quantity.
     pub quantity: f64,
-    /// Unit string (e.g. "grams", "cups", "pieces").
+    /// Unit string. Only gram-equivalent units are accepted: "grams", "gram", or "g".
     pub unit: String,
 }
 
@@ -598,7 +598,7 @@ impl Operation for CreateCustomFood {
     }
 
     fn description(&self) -> &str {
-        "Create a custom food entry with nutrition data. Nutrients are provided per one serving (not per 100g). Search before creating to avoid duplicates — reuse relies on search_food's substring match."
+        "Create a custom food entry with nutrition data. Nutrients are provided per one serving (not per 100g). serving_size.unit must be a gram-equivalent unit ('grams', 'gram', or 'g') — other units are rejected. Search before creating to avoid duplicates — reuse relies on search_food's substring match."
     }
 
     fn input_schema(&self) -> Option<serde_json::Value> {
