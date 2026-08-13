@@ -931,10 +931,10 @@ mod tests {
             .mount(&server)
             .await;
 
-        let _db = TempDb::new().await;
+        let db = TempDb::new().await;
         let off = Arc::new(make_off_client(&base_url));
         let fdc = Arc::new(make_fdc_client(&base_url));
-        let op = SearchFood::new(off, Some(fdc));
+        let op = SearchFood::new(off, Some(fdc)).with_db_path(db.path.clone());
 
         let result = op
             .execute_json(Arc::new(serde_json::json!({"query": "000000000000"})))

@@ -25,9 +25,12 @@ impl Connection {
     /// mode, enables foreign key enforcement, and runs pending migrations.
     pub async fn open() -> Result<Self, StorageError> {
         let db_path = db_path();
-        // Probe the lock BEFORE constructing a Turso database
-        if super::lock_probe::probe_db_lock(&db_path)
-            .map_err(|e| StorageError::Io(format!("failed to probe database lock: {e}")))?
+        // Probe the lock BEFORE constructing a Turso database. Skip the probe
+        // entirely on first run — a file that doesn't exist yet can't be
+        // locked, and `probe_db_lock` treats a missing file as an error.
+        if db_path.exists()
+            && super::lock_probe::probe_db_lock(&db_path)
+                .map_err(|e| StorageError::Io(format!("failed to probe database lock: {e}")))?
         {
             return Err(StorageError::Conflict("local_db_locked".to_string()));
         }
