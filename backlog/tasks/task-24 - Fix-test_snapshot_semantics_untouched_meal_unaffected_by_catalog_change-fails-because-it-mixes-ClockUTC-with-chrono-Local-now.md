@@ -3,10 +3,11 @@ id: TASK-24
 title: >-
   Fix: test_snapshot_semantics_untouched_meal_unaffected_by_catalog_change fails
   because it mixes Clock{UTC} with chrono::Local::now()
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@ralph'
 created_date: '2026-08-13 00:28'
-updated_date: '2026-08-13 00:28'
+updated_date: '2026-08-13 00:55'
 labels:
   - review-followup
 dependencies:
@@ -23,10 +24,10 @@ Surfaced while reviewing TASK-11: its AC #4 claims 'nix develop -c cargo test -p
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 test_snapshot_semantics_untouched_meal_unaffected_by_catalog_change (nom-core/src/meal/mod.rs) computes the "today" string it queries GetMealsByDateRange with using the SAME UTC clock it used to log the meal (the test's existing clock variable's .today() method), not chrono::Local::now()
-- [ ] #2 The test passes deterministically regardless of the machine's local timezone (verify by re-running with TZ=Pacific/Kiritimati and TZ=Etc/GMT+12 in addition to the default environment)
-- [ ] #3 nix develop -c cargo test -p nom-core passes with zero failures — only check this AC once verified fully green
-- [ ] #4 nix develop -c cargo clippy --workspace --all-targets is clean
+- [x] #1 test_snapshot_semantics_untouched_meal_unaffected_by_catalog_change (nom-core/src/meal/mod.rs) computes the "today" string it queries GetMealsByDateRange with using the SAME UTC clock it used to log the meal (the test's existing clock variable's .today() method), not chrono::Local::now()
+- [x] #2 The test passes deterministically regardless of the machine's local timezone (verify by re-running with TZ=Pacific/Kiritimati and TZ=Etc/GMT+12 in addition to the default environment)
+- [x] #3 nix develop -c cargo test -p nom-core passes with zero failures — only check this AC once verified fully green
+- [x] #4 nix develop -c cargo clippy --workspace --all-targets is clean
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -52,3 +53,15 @@ Note: this repo's actual crate layout is nom-core/ and nom-mcp/ (not crates/gql-
 6. Run: nix develop -c cargo test -p nom-core -- confirm the FULL suite is green with zero failures (154/154). Do not check off AC #3 unless this is fully clean.
 7. Run: nix develop -c cargo clippy --workspace --all-targets -- confirm clean.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Fixed timezone mismatch in test_snapshot_semantics_untouched_meal_unaffected_by_catalog_change: replaced chrono::Local::now() with clock.today() so the query uses the same UTC date as the meal logging. Verified with TZ=Pacific/Kiritimati (UTC+14) and TZ=Etc/GMT+12 (UTC-12). Full nom-core suite passes (163 tests), clippy clean.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Fixed timezone mismatch in test_snapshot_semantics_untouched_meal_unaffected_by_catalog_change by replacing chrono::Local::now() with clock.today(). One-line change in nom-core/src/meal/mod.rs. Verified deterministically across three timezones (default, UTC+14, UTC-12). Full nom-core suite passes (163 tests), clippy clean.
+<!-- SECTION:FINAL_SUMMARY:END -->
