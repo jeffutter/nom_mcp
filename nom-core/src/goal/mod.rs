@@ -414,13 +414,13 @@ impl Operation for SetNutritionGoals {
                                               prior_dir: Option<&String>|
          -> Result<Option<String>, ErrorData> {
             const VALID_DIRECTIONS: [&str; 3] = ["target", "minimum", "maximum"];
-            if let Some(d) = provided_dir {
-                if !VALID_DIRECTIONS.contains(&d.as_str()) {
-                    return Err(ErrorData::validation(
-                        format!("{nutrient_name}_direction"),
-                        format!("must be one of 'target', 'minimum', 'maximum', got '{d}'"),
-                    ));
-                }
+            if let Some(d) = provided_dir
+                && !VALID_DIRECTIONS.contains(&d.as_str())
+            {
+                return Err(ErrorData::validation(
+                    format!("{nutrient_name}_direction"),
+                    format!("must be one of 'target', 'minimum', 'maximum', got '{d}'"),
+                ));
             }
             if !value_is_set {
                 // Not setting this nutrient; return prior direction (for carry-forward)

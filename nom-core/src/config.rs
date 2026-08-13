@@ -183,10 +183,10 @@ pub fn db_path() -> PathBuf {
         });
 
     let path = data_home.join("nom_mcp").join("nom.db");
-    if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            let _ = std::fs::create_dir_all(parent);
-        }
+    if let Some(parent) = path.parent()
+        && !parent.exists()
+    {
+        let _ = std::fs::create_dir_all(parent);
     }
     path
 }

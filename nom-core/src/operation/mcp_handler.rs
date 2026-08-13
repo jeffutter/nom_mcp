@@ -11,9 +11,10 @@ use rmcp::{
     ErrorData, RoleServer,
     handler::server::ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, ContentBlock, ErrorCode, Implementation,
-        InitializeResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
-        ReadResourceResult, Resource, ResourceContents, ServerCapabilities, Tool,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorCode,
+        Implementation, InitializeResult, ListResourcesResult, ListToolsResult,
+        PaginatedRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
+        ResourceContents, ServerCapabilities, Tool,
     },
     service::RequestContext,
 };
@@ -192,7 +193,7 @@ impl ServerHandler for McpHandler {
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
+    ) -> Result<CallToolResponse, ErrorData> {
         let op = self.registry.get(&request.name).ok_or_else(|| {
             ErrorData::invalid_params(format!("unknown tool: {}", request.name), None)
         })?;
@@ -207,12 +208,12 @@ impl ServerHandler for McpHandler {
             Ok(result) => {
                 // Serialize result as text content
                 let text = serde_json::to_string(&result).unwrap_or_else(|_| result.to_string());
-                Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(text)]).into())
             }
             Err(error_data) => {
                 // Return as tool-level error per doc-5 §10
                 let message = format!("{}", error_data);
-                Ok(CallToolResult::error(vec![ContentBlock::text(message)]))
+                Ok(CallToolResult::error(vec![ContentBlock::text(message)]).into())
             }
         }
     }
@@ -231,8 +232,10 @@ impl ServerHandler for McpHandler {
         &self,
         request: rmcp::model::ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, ErrorData> {
-        self.dispatch_read_resource(&request.uri).await
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        self.dispatch_read_resource(&request.uri)
+            .await
+            .map(Into::into)
     }
 }
 

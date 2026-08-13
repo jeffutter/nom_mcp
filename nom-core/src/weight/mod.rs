@@ -313,10 +313,10 @@ impl Operation for UpdateWeightEntry {
         }
 
         // Validate value if provided
-        if let Some(v) = req.value {
-            if v <= 0.0 {
-                return Err(ErrorData::validation("value", "must be greater than zero"));
-            }
+        if let Some(v) = req.value
+            && v <= 0.0
+        {
+            return Err(ErrorData::validation("value", "must be greater than zero"));
         }
 
         conn.execute("BEGIN", ())
