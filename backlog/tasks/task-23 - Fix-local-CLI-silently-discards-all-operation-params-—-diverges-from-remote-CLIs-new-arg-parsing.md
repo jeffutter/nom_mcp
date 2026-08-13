@@ -7,7 +7,7 @@ status: Done
 assignee:
   - '@ralph'
 created_date: '2026-08-13 00:27'
-updated_date: '2026-08-13 00:48'
+updated_date: '2026-08-13 01:08'
 labels:
   - review-followup
   - planned
@@ -85,6 +85,8 @@ Extract the key=value argument parser from nom-mcp-remote.rs into a shared `nom-
 
 <!-- SECTION:NOTES:BEGIN -->
 Implementation: extracted parse_params/parse_value from nom-mcp-remote.rs into nom-core/src/cli.rs module. Both local-CLI (main.rs) and remote-CLI now import from shared location. Removed TODO stub that silently discarded params. Added 9 unit tests in cli.rs (7 migrated + 2 new for AC#4). All workspace tests pass except pre-existing test_snapshot_semantics_untouched_meal_unaffected_by_catalog_change. Clippy clean.
+
+Fixup applied post-review: this commit converted Connection::open_at/open error handling to bare '?' (relying on ErrorData: From<StorageError>) in LogMeal/UpdateMeal but left DeleteMeal, SearchMeals, and GetMealsByDateRange on the old verbose .map_err(...) form in the same file — an inconsistency introduced within this commit. Finished the conversion on the remaining 3 call sites in nom-core/src/meal/mod.rs for consistency. Note: this does change the error reason text on those 3 operations' connection-open failures from "failed to open database: {e}" to just "{e}" (StorageError's own Display, e.g. "storage database error: ..."), matching the behavior TASK-23 already gave LogMeal/UpdateMeal/SearchFood/CreateCustomFood — same ErrorCategory::StorageFailure throughout, only the free-text reason string is affected.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
