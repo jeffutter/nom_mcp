@@ -390,25 +390,6 @@ impl Operation for SetNutritionGoals {
         let req: SetNutritionGoalsRequest = serde_json::from_value((*args).clone())
             .map_err(|e| ErrorData::validation("request", format!("invalid request: {e}")))?;
 
-        // Validate direction values
-        let valid_directions = ["target", "minimum", "maximum"];
-        for (name, dir) in [
-            ("calories_direction", &req.calories_direction),
-            ("protein_g_direction", &req.protein_g_direction),
-            ("carbs_g_direction", &req.carbs_g_direction),
-            ("fat_g_direction", &req.fat_g_direction),
-            ("fiber_g_direction", &req.fiber_g_direction),
-        ] {
-            if let Some(ref d) = *dir {
-                if !valid_directions.contains(&d.as_str()) {
-                    return Err(ErrorData::validation(
-                        name,
-                        format!("must be one of 'target', 'minimum', 'maximum', got '{}'", d),
-                    ));
-                }
-            }
-        }
-
         #[cfg(test)]
         let conn = if let Some(ref path) = self.db_path {
             Connection::open_at(path).await?
@@ -426,11 +407,21 @@ impl Operation for SetNutritionGoals {
 
         // Determine directions: if prior goal exists, carry forward missing ones.
         // If a nutrient value is being newly set (not in prior), direction is required.
+        // Also validates that a provided direction string is one of the known values.
         let validate_and_resolve_direction = |nutrient_name: &str,
                                               value_is_set: bool,
                                               provided_dir: Option<&String>,
                                               prior_dir: Option<&String>|
          -> Result<Option<String>, ErrorData> {
+            const VALID_DIRECTIONS: [&str; 3] = ["target", "minimum", "maximum"];
+            if let Some(d) = provided_dir {
+                if !VALID_DIRECTIONS.contains(&d.as_str()) {
+                    return Err(ErrorData::validation(
+                        format!("{nutrient_name}_direction"),
+                        format!("must be one of 'target', 'minimum', 'maximum', got '{d}'"),
+                    ));
+                }
+            }
             if !value_is_set {
                 // Not setting this nutrient; return prior direction (for carry-forward)
                 return Ok(prior_dir.cloned());
@@ -444,52 +435,81 @@ impl Operation for SetNutritionGoals {
             } else {
                 // New nutrient without direction — error
                 Err(ErrorData::validation(
-                    format!("{}_direction", nutrient_name),
+                    format!("{nutrient_name}_direction"),
                     "required when setting a nutrient target for the first time",
                 ))
             }
         };
 
-        let cal_dir = validate_and_resolve_direction(
-            "calories",
-            req.calories.is_some(),
-            req.calories_direction.as_ref(),
-            prior.as_ref().and_then(|g| g.calories_direction.as_ref()),
-        )?;
-        let prot_dir = validate_and_resolve_direction(
-            "protein_g",
-            req.protein_g.is_some(),
-            req.protein_g_direction.as_ref(),
-            prior.as_ref().and_then(|g| g.protein_g_direction.as_ref()),
-        )?;
-        let carbs_dir = validate_and_resolve_direction(
-            "carbs_g",
-            req.carbs_g.is_some(),
-            req.carbs_g_direction.as_ref(),
-            prior.as_ref().and_then(|g| g.carbs_g_direction.as_ref()),
-        )?;
-        let fat_dir = validate_and_resolve_direction(
-            "fat_g",
-            req.fat_g.is_some(),
-            req.fat_g_direction.as_ref(),
-            prior.as_ref().and_then(|g| g.fat_g_direction.as_ref()),
-        )?;
-        let fiber_dir = validate_and_resolve_direction(
-            "fiber_g",
-            req.fiber_g.is_some(),
-            req.fiber_g_direction.as_ref(),
-            prior.as_ref().and_then(|g| g.fiber_g_direction.as_ref()),
-        )?;
-
         // Build merged values: new overrides prior, prior fills gaps.
         let merge =
             |new_val: Option<f64>, prior_val: Option<f64>| -> Option<f64> { new_val.or(prior_val) };
 
-        let merged_calories = merge(req.calories, prior.as_ref().and_then(|g| g.calories));
-        let merged_protein_g = merge(req.protein_g, prior.as_ref().and_then(|g| g.protein_g));
-        let merged_carbs_g = merge(req.carbs_g, prior.as_ref().and_then(|g| g.carbs_g));
-        let merged_fat_g = merge(req.fat_g, prior.as_ref().and_then(|g| g.fat_g));
-        let merged_fiber_g = merge(req.fiber_g, prior.as_ref().and_then(|g| g.fiber_g));
+        // One entry per directional nutrient: (name, new value, provided direction,
+        // prior value, prior direction). target_weight has no direction and is
+        // merged separately below.
+        let nutrients: [(
+            &str,
+            Option<f64>,
+            Option<&String>,
+            Option<f64>,
+            Option<&String>,
+        ); 5] = [
+            (
+                "calories",
+                req.calories,
+                req.calories_direction.as_ref(),
+                prior.as_ref().and_then(|g| g.calories),
+                prior.as_ref().and_then(|g| g.calories_direction.as_ref()),
+            ),
+            (
+                "protein_g",
+                req.protein_g,
+                req.protein_g_direction.as_ref(),
+                prior.as_ref().and_then(|g| g.protein_g),
+                prior.as_ref().and_then(|g| g.protein_g_direction.as_ref()),
+            ),
+            (
+                "carbs_g",
+                req.carbs_g,
+                req.carbs_g_direction.as_ref(),
+                prior.as_ref().and_then(|g| g.carbs_g),
+                prior.as_ref().and_then(|g| g.carbs_g_direction.as_ref()),
+            ),
+            (
+                "fat_g",
+                req.fat_g,
+                req.fat_g_direction.as_ref(),
+                prior.as_ref().and_then(|g| g.fat_g),
+                prior.as_ref().and_then(|g| g.fat_g_direction.as_ref()),
+            ),
+            (
+                "fiber_g",
+                req.fiber_g,
+                req.fiber_g_direction.as_ref(),
+                prior.as_ref().and_then(|g| g.fiber_g),
+                prior.as_ref().and_then(|g| g.fiber_g_direction.as_ref()),
+            ),
+        ];
+
+        let mut merged_values: [Option<f64>; 5] = [None; 5];
+        let mut resolved_dirs: [Option<String>; 5] = [None, None, None, None, None];
+        for (i, (name, value, provided_dir, prior_value, prior_dir)) in
+            nutrients.into_iter().enumerate()
+        {
+            resolved_dirs[i] =
+                validate_and_resolve_direction(name, value.is_some(), provided_dir, prior_dir)?;
+            merged_values[i] = merge(value, prior_value);
+        }
+        let [
+            merged_calories,
+            merged_protein_g,
+            merged_carbs_g,
+            merged_fat_g,
+            merged_fiber_g,
+        ] = merged_values;
+        let [cal_dir, prot_dir, carbs_dir, fat_dir, fiber_dir] = resolved_dirs;
+
         let merged_target_weight = merge(
             req.target_weight,
             prior.as_ref().and_then(|g| g.target_weight),
@@ -678,34 +698,46 @@ impl Operation for GetGoalProgress {
             })
         };
 
-        let goal_calories = goal.as_ref().and_then(|g| g.calories);
-        let goal_calories_dir = goal
-            .as_ref()
-            .and_then(|g| parse_direction(g.calories_direction.as_ref()));
-        let goal_protein_g = goal.as_ref().and_then(|g| g.protein_g);
-        let goal_protein_g_dir = goal
-            .as_ref()
-            .and_then(|g| parse_direction(g.protein_g_direction.as_ref()));
-        let goal_carbs_g = goal.as_ref().and_then(|g| g.carbs_g);
-        let goal_carbs_g_dir = goal
-            .as_ref()
-            .and_then(|g| parse_direction(g.carbs_g_direction.as_ref()));
-        let goal_fat_g = goal.as_ref().and_then(|g| g.fat_g);
-        let goal_fat_g_dir = goal
-            .as_ref()
-            .and_then(|g| parse_direction(g.fat_g_direction.as_ref()));
-        let goal_fiber_g = goal.as_ref().and_then(|g| g.fiber_g);
-        let goal_fiber_g_dir = goal
-            .as_ref()
-            .and_then(|g| parse_direction(g.fiber_g_direction.as_ref()));
         let goal_target_weight = goal.as_ref().and_then(|g| g.target_weight);
 
+        // One entry per nutrient: (target value, direction string, consumed amount).
+        let nutrients: [(Option<f64>, Option<&String>, f64); 5] = [
+            (
+                goal.as_ref().and_then(|g| g.calories),
+                goal.as_ref().and_then(|g| g.calories_direction.as_ref()),
+                cal,
+            ),
+            (
+                goal.as_ref().and_then(|g| g.protein_g),
+                goal.as_ref().and_then(|g| g.protein_g_direction.as_ref()),
+                prot,
+            ),
+            (
+                goal.as_ref().and_then(|g| g.carbs_g),
+                goal.as_ref().and_then(|g| g.carbs_g_direction.as_ref()),
+                carbs,
+            ),
+            (
+                goal.as_ref().and_then(|g| g.fat_g),
+                goal.as_ref().and_then(|g| g.fat_g_direction.as_ref()),
+                fat,
+            ),
+            (
+                goal.as_ref().and_then(|g| g.fiber_g),
+                goal.as_ref().and_then(|g| g.fiber_g_direction.as_ref()),
+                fiber,
+            ),
+        ];
+
         // Build nutrient progress
-        let calories_progress = nutrient_progress(cal, goal_calories, goal_calories_dir);
-        let protein_g_progress = nutrient_progress(prot, goal_protein_g, goal_protein_g_dir);
-        let carbs_g_progress = nutrient_progress(carbs, goal_carbs_g, goal_carbs_g_dir);
-        let fat_g_progress = nutrient_progress(fat, goal_fat_g, goal_fat_g_dir);
-        let fiber_g_progress = nutrient_progress(fiber, goal_fiber_g, goal_fiber_g_dir);
+        let mut progress = nutrients.into_iter().map(|(target, dir_str, consumed)| {
+            nutrient_progress(consumed, target, parse_direction(dir_str))
+        });
+        let calories_progress = progress.next().unwrap();
+        let protein_g_progress = progress.next().unwrap();
+        let carbs_g_progress = progress.next().unwrap();
+        let fat_g_progress = progress.next().unwrap();
+        let fiber_g_progress = progress.next().unwrap();
 
         // Build weight progress
         let weight_progress = weight_progress(latest_weight, goal_target_weight);
