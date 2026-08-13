@@ -295,6 +295,7 @@ mod tests {
     // -- Precedence tests with real config file (serialized to avoid env var conflicts) --
 
     /// Guard that restores env vars and cleans up temp dirs on drop.
+    /// Keep in sync with the identical TestGuard in nom-mcp/src/bin/nom-mcp-remote.rs.
     struct TestGuard {
         temp_dir: Option<PathBuf>,
         saved_xdg: Option<String>,
@@ -331,8 +332,14 @@ mod tests {
                     unsafe { std::env::set_var("XDG_CONFIG_HOME", saved) };
                 }
             }
-            // Remove any test-specific env vars
+            // Remove any test-specific env vars.
+            // Skip XDG_CONFIG_HOME — the block above already restored (or
+            // correctly left unset) that variable; removing it here would
+            // unconditionally erase a pre-existing value.
             for var in &self.cleared_vars {
+                if var == "XDG_CONFIG_HOME" {
+                    continue;
+                }
                 unsafe { std::env::remove_var(var) };
             }
             // Remove temp dir
@@ -423,6 +430,28 @@ timezone = "America/Los_Angeles"
         assert_eq!(config.http_bind_address, "127.0.0.1");
         assert!(config.usda_api_key.is_none());
         assert!(config.timezone.is_none());
+    }
+
+    #[serial_test::serial]
+    #[test]
+    fn test_guard_restores_pre_existing_xdg_config_home() {
+        // Set XDG_CONFIG_HOME to a known value BEFORE constructing the guard,
+        // then use the guard to point at a different dir, drop, and verify
+        // the original value is restored (not removed).
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", "/tmp/nom_mcp_original_value_marker");
+        }
+        let mut guard = TestGuard::new();
+        guard.set("XDG_CONFIG_HOME", "/tmp/nom_mcp_test_scratch");
+        drop(guard);
+        assert_eq!(
+            std::env::var("XDG_CONFIG_HOME").unwrap(),
+            "/tmp/nom_mcp_original_value_marker"
+        );
+        // Clean up marker so we don't pollute subsequent tests
+        unsafe {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
     }
 
     #[serial_test::serial]

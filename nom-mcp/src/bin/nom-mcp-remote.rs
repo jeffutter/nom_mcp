@@ -97,8 +97,8 @@ fn fetch_from_server(
 mod tests {
     use super::*;
 
-    // -- TestGuard for config isolation (matches nom-core/src/config.rs) --
-
+    // -- TestGuard for config isolation.
+    // Keep in sync with the identical TestGuard in nom-core/src/config.rs --
     struct TestGuard {
         temp_dir: Option<std::path::PathBuf>,
         saved_xdg: Option<String>,
@@ -134,7 +134,12 @@ mod tests {
                     unsafe { std::env::set_var("XDG_CONFIG_HOME", saved) };
                 }
             }
+            // Remove any test-specific env vars.
+            // Skip XDG_CONFIG_HOME — the block above already restored it.
             for var in &self.cleared_vars {
+                if var == "XDG_CONFIG_HOME" {
+                    continue;
+                }
                 unsafe { std::env::remove_var(var) };
             }
             if let Some(ref dir) = self.temp_dir {
