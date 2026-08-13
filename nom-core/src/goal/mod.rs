@@ -73,15 +73,15 @@ struct GoalProgress {
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
-struct WeightProgress {
+pub(crate) struct WeightProgress {
     #[serde(skip_serializing_if = "Option::is_none", rename = "latest_weight")]
     latest_weight: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "target_weight")]
     target_weight: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    remaining: Option<f64>,
+    pub(crate) remaining: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    status: Option<ProgressStatus>,
+    pub(crate) status: Option<ProgressStatus>,
 }
 
 /// Active goal row from database.
@@ -252,7 +252,7 @@ async fn fetch_latest_weight(
 }
 
 /// Compute per-nutrient progress fields.
-fn nutrient_progress(
+pub(crate) fn nutrient_progress(
     consumed: f64,
     target: Option<f64>,
     direction: Option<Direction>,
@@ -287,7 +287,10 @@ fn nutrient_progress(
 }
 
 /// Compute weight progress fields.
-fn weight_progress(latest_weight: Option<f64>, target_weight: Option<f64>) -> WeightProgress {
+pub(crate) fn weight_progress(
+    latest_weight: Option<f64>,
+    target_weight: Option<f64>,
+) -> WeightProgress {
     let (remaining, status) = match (latest_weight, target_weight) {
         (Some(lw), Some(tw)) => {
             let rem = tw - lw;

@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@ralph'
 created_date: '2026-08-11 13:24'
-updated_date: '2026-08-13 11:34'
+updated_date: '2026-08-13 11:45'
 labels:
   - planned
 dependencies:
@@ -166,3 +166,9 @@ Make NutrientProgress and ProgressStatus pub in goal/mod.rs so weekly/mod.rs can
 - One gotcha: settings table has no PK; must handle single-row upsert carefully (UPDATE then INSERT-if-no-changes pattern)
 - Testing: All integration tests use TempDb fixture; no external services needed
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Fixup applied post-review: weekly::nutrient_progress() was a byte-for-byte copy of goal::nutrient_progress(), and weekly's inline weight remaining/status match duplicated goal::weight_progress() — both computing the same policy (remaining/percent/status thresholds) in two places, exactly the class of drift risk the commit's own visibility change (making NutrientProgress/ProgressStatus pub) was meant to avoid. Made goal::nutrient_progress()/weight_progress() and goal::WeightProgress pub(crate) and had weekly/mod.rs call them instead of reimplementing. Also simplified rolling_start_date() to reuse Clock::format_date() instead of manual string concatenation. Verified: nix develop -c cargo test -p nom-core (221 tests) + clippy + fmt all clean.
+<!-- SECTION:NOTES:END -->

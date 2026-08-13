@@ -3,12 +3,13 @@
 //! Provides `fetch_weekly_summary()` for the MCP resource `nom://weekly-summary`.
 //! Computes daily averages against active goals and tracks weight trends.
 
-use chrono::Datelike;
 use serde::Serialize;
 
 use crate::clock::Clock;
 use crate::error::ErrorData;
-use crate::goal::{Direction, NutrientProgress, ProgressStatus};
+use crate::goal::{
+    Direction, NutrientProgress, ProgressStatus, nutrient_progress, weight_progress,
+};
 use crate::storage::Connection;
 
 // ---------------------------------------------------------------------------
@@ -156,20 +157,8 @@ pub async fn fetch_weekly_summary(
     };
 
     let goal_target_weight = goal.as_ref().and_then(|g| g.target_weight);
-    let (remaining, status) = match (latest_known_weight, goal_target_weight) {
-        (Some(lw), Some(tw)) => {
-            let rem = tw - lw;
-            let st = if (rem - 0.0).abs() < 1e-9 {
-                Some(ProgressStatus::Met)
-            } else if rem > 0.0 {
-                Some(ProgressStatus::Under)
-            } else {
-                Some(ProgressStatus::Over)
-            };
-            (Some(rem), st)
-        }
-        _ => (None, None),
-    };
+    let weight_progress = weight_progress(latest_known_weight, goal_target_weight);
+    let (remaining, status) = (weight_progress.remaining, weight_progress.status);
 
     Ok(WeeklySummary {
         start_date,
@@ -195,52 +184,11 @@ pub async fn fetch_weekly_summary(
     })
 }
 
-/// Compute per-nutrient progress fields (reused from goal module logic).
-fn nutrient_progress(
-    consumed: f64,
-    target: Option<f64>,
-    direction: Option<Direction>,
-) -> NutrientProgress {
-    let (remaining, percent, status) = if let Some(t) = target {
-        let rem = t - consumed;
-        let pct = if t == 0.0 {
-            None
-        } else {
-            Some((consumed / t) * 100.0)
-        };
-        let st = if (rem - 0.0).abs() < 1e-9 {
-            Some(ProgressStatus::Met)
-        } else if rem > 0.0 {
-            Some(ProgressStatus::Under)
-        } else {
-            Some(ProgressStatus::Over)
-        };
-        (Some(rem), pct, st)
-    } else {
-        (None, None, None)
-    };
-
-    NutrientProgress {
-        consumed,
-        target,
-        remaining,
-        percent,
-        direction,
-        status,
-    }
-}
-
 /// Calculate the start date of the rolling 7-day window (6 days before end_date).
 fn rolling_start_date(end_date: &str) -> String {
-    if let Ok(date) = end_date.parse::<chrono::NaiveDate>() {
-        let start = date - chrono::Days::new(6);
-        format!("{}", start.year())
-            + "-"
-            + &format!("{:02}", start.month())
-            + "-"
-            + &format!("{:02}", start.day())
-    } else {
-        end_date.to_string()
+    match end_date.parse::<chrono::NaiveDate>() {
+        Ok(date) => Clock::format_date(date - chrono::Days::new(6)),
+        Err(_) => end_date.to_string(),
     }
 }
 
