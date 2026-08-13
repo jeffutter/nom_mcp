@@ -20,7 +20,11 @@ fn hold_lock(path: &Path) {
         l_len: 0,
         l_pid: 0,
     };
-    unsafe { libc::fcntl(fd, libc::F_SETLKW, &mut flock) };
+    let ret = unsafe { libc::fcntl(fd, libc::F_SETLKW, &mut flock) };
+    if ret != 0 {
+        let err = std::io::Error::last_os_error();
+        panic!("F_SETLKW failed on {}: {}", path.display(), err);
+    }
     // Ack parent: we hold the lock now
     std::io::stdout().write_all(b"1").unwrap();
     std::io::stdout().flush().unwrap();

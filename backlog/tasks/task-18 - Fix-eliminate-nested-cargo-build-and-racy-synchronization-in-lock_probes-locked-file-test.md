@@ -7,7 +7,7 @@ status: Done
 assignee:
   - '@ralph'
 created_date: '2026-08-12 20:22'
-updated_date: '2026-08-13 07:08'
+updated_date: '2026-08-13 11:42'
 labels:
   - review-followup
   - planned
@@ -144,4 +144,6 @@ AC #1 satisfied as part of a review-round fixup to TASK-10's commit (unpushed, f
 AC #2: Replaced fixed 200ms sleep with child-to-parent stdout ack signal. lock_holder.rs writes b"1" to stdout immediately after F_SETLKW succeeds; test reads exactly one byte via piped stdout + mpsc channel with 5s bounded timeout. AC #3: Added ChildGuard RAII wrapper that kills+waits spawned child on drop, defused after successful ack receipt. AC #4 verified: 3 consecutive runs all passed, no recompilation on runs 2/3. AC #5: full nom-core test suite (209 unit + 1 integration) passes.
 
 Fixup applied post-review: ChildGuard was defused (guard.0.take()) immediately after receiving the child's ack signal, before the try_wait()/probe_db_lock().expect()/assert!(is_locked) block that can itself panic — leaving that whole window unprotected and defeating AC #3's guarantee that the child is killed on any panic between spawn and kill. Moved the defuse point to right before the final explicit kill, keeping the guard armed through the assertions. Verified: 3 consecutive runs of 'nix develop -c cargo test -p nom-core --test lock_probe_integration -- --nocapture' pass with no recompilation, plus full 'cargo test -p nom-core' (210 tests) and clippy/fmt clean.
+
+Fixup applied post-review: lock_holder.rs discarded F_SETLKW's return value and unconditionally sent the ack byte, so a failed lock acquisition (e.g. EINTR) would still tell the parent the lock was held. Now checks the return code and panics loudly instead of acking on failure. Verified: 3 consecutive integration-test runs pass with no recompilation, full nom-core suite (221 tests) + clippy + fmt clean.
 <!-- SECTION:NOTES:END -->
