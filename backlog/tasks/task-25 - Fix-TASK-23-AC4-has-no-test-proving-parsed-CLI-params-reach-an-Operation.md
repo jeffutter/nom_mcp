@@ -1,11 +1,14 @@
 ---
 id: TASK-25
 title: 'Fix: TASK-23 AC#4 has no test proving parsed CLI params reach an Operation'
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@ralph'
 created_date: '2026-08-13 01:09'
+updated_date: '2026-08-13 04:13'
 labels:
   - review-followup
+  - planned
 dependencies:
   - TASK-23
 priority: high
@@ -20,23 +23,45 @@ Found while reviewing TASK-23 (nom-mcp/src/main.rs execute_from_args(), nom-core
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A new test proves parsed CLI params (e.g. query=almonds) actually change an Operation's behavior/output compared to no params, not just parse_params()'s own return value
-- [ ] #2 The test either lives in a #[cfg(test)] mod tests block added to nom-mcp/src/main.rs and calls execute_from_args(...), OR lives in nom-core/src/food/mod.rs's existing test module and feeds nom_core::cli::parse_params(...)'s output directly into SearchFood::execute_json (using the existing TempDb/.with_db_path()/make_off_client/make_fdc_client test seams already used by test_search_food_free_text_custom_only at ~line 949) — either way it must exercise an Operation's execute_json, not parse_params alone
-- [ ] #3 nix develop -c cargo test --workspace passes
-- [ ] #4 nix develop -c cargo clippy --workspace --all-targets is clean
+- [x] #1 A new test proves parsed CLI params (e.g. query=almonds) actually change an Operation's behavior/output compared to no params, not just parse_params()'s own return value
+- [x] #2 The test either lives in a #[cfg(test)] mod tests block added to nom-mcp/src/main.rs and calls execute_from_args(...), OR lives in nom-core/src/food/mod.rs's existing test module and feeds nom_core::cli::parse_params(...)'s output directly into SearchFood::execute_json (using the existing TempDb/.with_db_path()/make_off_client/make_fdc_client test seams already used by test_search_food_free_text_custom_only at ~line 949) — either way it must exercise an Operation's execute_json, not parse_params alone
+- [x] #3 nix develop -c cargo test --workspace passes
+- [x] #4 nix develop -c cargo clippy --workspace --all-targets is clean
 <!-- AC:END -->
 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-SETUP (read first): This is a Rust+WebAssembly core (crates/gql-core) with a TypeScript/React web app (web/). Wait -- this repo's actual crate layout is nom-core/ and nom-mcp/ (not crates/gql-core -- ignore that path in the preamble; everything else in the preamble still applies). ALL commands must run inside the Nix dev shell: either run 'direnv allow' once, or prefix every command with 'nix develop -c'. Work from the repository root unless told otherwise. Do not change pinned dependency versions.
+Single new integration test in nom-core/src/food/mod.rs tests module that feeds parse_params() output directly into SearchFood::execute_json().
 
-1. Open nom-core/src/food/mod.rs and read SearchFood (struct at ~line 347, Operation impl at ~line 372) and its SearchFoodRequest (~line 342, note 'query: String' is a REQUIRED field with no default -- deserializing {} against it fails with a validation error, while {"query": "..."} succeeds; this is your natural signal that params flowed through, distinct from calling with {}).
-2. Read the existing test test_search_food_free_text_custom_only (nom-core/src/food/mod.rs ~line 949) as your template: it builds a TempDb, seeds a custom food row directly via SQL, wires make_off_client/make_fdc_client against a wiremock MockServer, and constructs SearchFood::new(off, Some(fdc)).with_db_path(db.path.clone()).
-3. Add a new test in the same mod tests block, e.g. test_search_food_via_parsed_cli_params_differs_from_empty. In it: build a SearchFood op the same way as step 2 (seed one custom food, e.g. 'Almond Butter'), then call op.execute_json(Arc::new(nom_core::cli::parse_params(&["query=almond".to_string()]).unwrap())) and assert it returns the seeded food (non-empty array matching the seeded row). Then call op.execute_json(Arc::new(nom_core::cli::parse_params(&[]).unwrap())) (i.e. params = {}) and assert it returns Err (SearchFoodRequest deserialization fails because 'query' is missing) -- this proves the parsed key=value args are the thing actually changing the Operation's behavior, not just parse_params's own return value.
-4. Add 'use nom_core::cli::parse_params;' (or fully-qualify as in step 3) to the test module's imports if not already present.
-5. Run: nix develop -c cargo test -p nom-core -- food::tests::test_search_food_via_parsed_cli_params_differs_from_empty --nocapture and confirm it passes, then the full suite.
-6. Run: nix develop -c cargo test --workspace -- confirm all tests pass (only the pre-existing separately-tracked failures, if any remain, should differ from a clean run -- as of this review the full suite is green with zero failures, so expect zero failures here too).
-7. Run: nix develop -c cargo clippy --workspace --all-targets -- confirm clean.
-8. Run: nix develop -c cargo fmt --all -- --check -- confirm clean.
+## Steps
+
+1. **Read context**: Open nom-core/src/food/mod.rs ~line 692 (mod tests block), confirm existing imports (`use crate::storage::test::TempDb;`, wiremock matchers). Note that `SearchFoodRequest` (~line 342) has `query: String` with NO default — deserializing `{}` against it produces `Err(validation("query", ...))`.
+
+2. **Add the test** — `test_search_food_via_parsed_cli_params_proves_params_flow_to_operation`:
+   - Build `SearchFood` op the same way as `test_search_food_free_text_custom_only`: `TempDb`, seed one custom food ("Almond Butter"), mock USDA returning empty, wire `make_off_client`/`make_fdc_client`, construct op with `.with_db_path(db.path.clone())`.
+   - **Part A — with params**: Call `op.execute_json(Arc::new(crate::cli::parse_params(&["query=almond".into()]).unwrap()))`. Assert result is non-empty array containing the seeded food (`arr[0]["name"] == "Almond Butter"`).
+   - **Part B — without params**: Call `op.execute_json(Arc::new(crate::cli::parse_params(&[]).unwrap()))`. Assert it returns `Err` because `SearchFoodRequest` deserialization fails on missing `query` field. This proves the parsed key=value args are what actually drives Operation behavior, not just `parse_params()` return value.
+
+3. **Import**: Add `use crate::cli::parse_params;` to the test module imports (or fully qualify inline — `crate::cli::parse_params(...)` works too since `super::*` is already imported).
+
+4. **Run targeted test**: `nix develop -c cargo test -p nom-core -- food::tests::test_search_food_via_parsed_cli_params_proves_params_flow_to_operation --nocapture` — confirm Part A succeeds with seeded food, Part B fails with validation error.
+
+5. **Run full suite**: `nix develop -c cargo test --workspace` — all green (zero failures expected per current baseline).
+
+6. **Lint check**: `nix develop -c cargo clippy --all-targets --all-features --workspace -- -D warnings` — clean.
+
+7. **Format check**: `nix develop -c cargo fmt --all -- --check` — clean.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Test added in nom-core/src/food/mod.rs: test_search_food_via_parsed_cli_params_proves_params_flow_to_operation. Two-part test: Part A uses parse_params(['query=almond']) -> execute_json() -> finds seeded 'Almond Butter' custom food. Part B uses parse_params([]) -> execute_json() -> validation error on missing 'query'. All 166 workspace tests pass, clippy clean, format clean.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added integration test in nom-core/src/food/mod.rs that feeds parse_params() output directly into SearchFood::execute_json(). Part A proves parsed CLI params drive operation behavior (finds seeded food), Part B proves empty params produce validation error. This closes the correctness gap from TASK-23 where parse_params was tested in isolation but no test tied it to an Operation invocation.
+<!-- SECTION:FINAL_SUMMARY:END -->

@@ -1231,4 +1231,61 @@ mod tests {
 
         assert_eq!(err.category, crate::error::ErrorCategory::Validation);
     }
+
+    // -- Prove parsed CLI params flow through to an Operation --
+
+    /// Proves that parse_params() output actually drives SearchFood behavior,
+    /// not just parse_params()'s own return value.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_search_food_via_parsed_cli_params_proves_params_flow_to_operation() {
+        let db = TempDb::new().await;
+        let server = wiremock::MockServer::start().await;
+        let base_url = server.uri();
+
+        // Pre-seed a custom food
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        conn.execute(
+            "INSERT INTO foods (source, name, calories_per_100g, protein_g_per_100g) \
+             VALUES ('Custom', 'Almond Butter', 610.0, 21.0)",
+            (),
+        )
+        .await
+        .unwrap();
+
+        // USDA search returns empty
+        Mock::given(method("POST"))
+            .and(path("/v1/foods/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "foodMatches": [],
+                "totalHits": 0
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let off = Arc::new(make_off_client(&base_url));
+        let fdc = Arc::new(make_fdc_client(&base_url));
+
+        // --- Part A: with parsed CLI params, operation finds the seeded food ---
+        let params_with_query = crate::cli::parse_params(&["query=almond".into()]).unwrap();
+        let op_a = SearchFood::new(off.clone(), Some(fdc.clone())).with_db_path(db.path.clone());
+        let result = op_a
+            .execute_json(Arc::new(params_with_query))
+            .await
+            .unwrap();
+
+        let arr = result.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["source"], "Custom");
+        assert_eq!(arr[0]["name"], "Almond Butter");
+
+        // --- Part B: without params, operation fails because query is required ---
+        let params_empty = crate::cli::parse_params(&[]).unwrap();
+        let op_b = SearchFood::new(off, Some(fdc)).with_db_path(db.path.clone());
+        let err = op_b.execute_json(Arc::new(params_empty)).await.unwrap_err();
+
+        assert_eq!(err.category, crate::error::ErrorCategory::Validation);
+        assert_eq!(err.field.as_deref(), Some("query"));
+    }
 }
