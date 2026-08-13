@@ -11,8 +11,8 @@ use rmcp::{
     ErrorData, RoleServer,
     handler::server::ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorCode,
-        Implementation, InitializeResult, ListResourcesResult, ListToolsResult,
+        CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
+        ErrorCode, Implementation, InitializeResult, ListResourcesResult, ListToolsResult,
         PaginatedRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
         ResourceContents, ServerCapabilities, Tool,
     },
@@ -38,6 +38,26 @@ const GOAL_PROGRESS_UI_RESOURCE_URI: &str = "ui://nom-mcp/goal-progress";
 /// no `csp` domains, which this one deliberately doesn't — blocks anything
 /// else (`connect-src 'none'`, `script-src 'self' 'unsafe-inline'`).
 const GOAL_PROGRESS_WIDGET_HTML: &str = include_str!("../../assets/goal_progress_widget.html");
+
+/// Cache TTLs (SEP-2549: `ReadResourceResult`/`ListToolsResult`/
+/// `ListResourcesResult` all carry a required `ttlMs`/`cacheScope` pair once
+/// a client negotiates a protocol version that mandates them — omitting them
+/// entirely, as bare `::new`/`::with_all_items` do, fails client-side
+/// validation on such clients even though older clients tolerate the
+/// omission.
+///
+/// `LISTING_TTL_MS` covers `tools/list`/`resources/list`: short, because
+/// `get_goal_progress`'s `_meta.ui` is gated on the `widget_display_enabled`
+/// setting (see `build_tools_gated`), which can change between requests.
+/// `WIDGET_HTML_TTL_MS` covers the goal-progress widget's `ui://` resource:
+/// long, because that HTML is `include_str!`-baked into the binary and is
+/// byte-identical for every request until the next deploy.
+/// `WEEKLY_SUMMARY_TTL_MS` covers the weekly-summary resource: short and
+/// private, since it reflects live, single-user data that changes as meals
+/// and weights are logged.
+const LISTING_TTL_MS: u64 = 300_000; // 5 minutes
+const WIDGET_HTML_TTL_MS: u64 = 86_400_000; // 24 hours
+const WEEKLY_SUMMARY_TTL_MS: u64 = 60_000; // 1 minute
 
 /// Build the `_meta.ui` object that points a Tool declaration at
 /// [`GOAL_PROGRESS_UI_RESOURCE_URI`], per the MCP Apps extension
@@ -228,7 +248,9 @@ impl McpHandler {
                     meta: None,
                 };
 
-                Ok(ReadResourceResult::new(vec![contents]))
+                Ok(ReadResourceResult::new(vec![contents])
+                    .with_ttl_ms(WEEKLY_SUMMARY_TTL_MS)
+                    .with_cache_scope(CacheScope::Private))
             }
             GOAL_PROGRESS_UI_RESOURCE_URI => {
                 // No DB access needed: this serves the static widget shell.
@@ -241,7 +263,9 @@ impl McpHandler {
                     text: GOAL_PROGRESS_WIDGET_HTML.to_string(),
                     meta: None,
                 };
-                Ok(ReadResourceResult::new(vec![contents]))
+                Ok(ReadResourceResult::new(vec![contents])
+                    .with_ttl_ms(WIDGET_HTML_TTL_MS)
+                    .with_cache_scope(CacheScope::Public))
             }
             other => Err(ErrorData::new(
                 ErrorCode::INVALID_PARAMS,
@@ -313,9 +337,11 @@ impl ServerHandler for McpHandler {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(
-            self.build_tools_gated().await,
-        ))
+        Ok(
+            ListToolsResult::with_all_items(self.build_tools_gated().await)
+                .with_ttl_ms(LISTING_TTL_MS)
+                .with_cache_scope(CacheScope::Public),
+        )
     }
 
     async fn call_tool(
@@ -341,7 +367,9 @@ impl ServerHandler for McpHandler {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
-        Ok(ListResourcesResult::with_all_items(self.build_resources()))
+        Ok(ListResourcesResult::with_all_items(self.build_resources())
+            .with_ttl_ms(LISTING_TTL_MS)
+            .with_cache_scope(CacheScope::Public))
     }
 
     async fn read_resource(
