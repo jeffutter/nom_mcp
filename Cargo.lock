@@ -1966,6 +1966,7 @@ version = "0.1.0"
 dependencies = [
  "nom-core",
  "reqwest",
+ "rmcp",
  "serde_json",
  "serial_test",
  "tokio",

@@ -15,6 +15,7 @@ path = "src/bin/nom-mcp-remote.rs"
 [dependencies]
 nom-core = { path = "../nom-core" }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
+rmcp = { version = "2.2.0", features = ["server", "transport-io"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt"] }
 url = "2"
