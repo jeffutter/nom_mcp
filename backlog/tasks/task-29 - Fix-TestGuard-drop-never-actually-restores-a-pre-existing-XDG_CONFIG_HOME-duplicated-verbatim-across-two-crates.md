@@ -3,9 +3,11 @@ id: TASK-29
 title: >-
   Fix: TestGuard::drop() never actually restores a pre-existing XDG_CONFIG_HOME,
   duplicated verbatim across two crates
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@ralph'
 created_date: '2026-08-13 02:07'
+updated_date: '2026-08-13 05:20'
 labels:
   - review-followup
 dependencies:
@@ -22,12 +24,12 @@ Found while reviewing TASK-22 (nom-mcp/src/bin/nom-mcp-remote.rs:100-144), which
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 TestGuard::drop() in nom-core/src/config.rs no longer removes XDG_CONFIG_HOME as part of the generic cleared_vars loop when a prior value was successfully restored — e.g. by excluding "XDG_CONFIG_HOME" from the generic remove loop (the earlier restore branch already owns that variable's final state)
-- [ ] #2 A new test in nom-core/src/config.rs's #[cfg(test)] mod tests proves the bug is fixed: set XDG_CONFIG_HOME to a known value before constructing TestGuard, use the guard to point at a different temp dir, drop the guard, and assert XDG_CONFIG_HOME is back to the original known value (not unset)
-- [ ] #3 nom-mcp/src/bin/nom-mcp-remote.rs's TestGuard is no longer a separate verbatim copy — either it re-uses a shared implementation exposed from nom-core (e.g. via a #[cfg(test)] pub test_support module gated behind a dev-dependency on nom-core with its test-support feature enabled) or, if cross-crate sharing proves impractical within this ticket's scope, both copies are fixed identically and a comment on each references the other as the sibling implementation that must stay in sync
-- [ ] #4 nix develop -c cargo test -p nom-core passes
-- [ ] #5 nix develop -c cargo test -p nom-mcp passes
-- [ ] #6 nix develop -c cargo clippy --workspace --all-targets is clean
+- [x] #1 TestGuard::drop() in nom-core/src/config.rs no longer removes XDG_CONFIG_HOME as part of the generic cleared_vars loop when a prior value was successfully restored — e.g. by excluding "XDG_CONFIG_HOME" from the generic remove loop (the earlier restore branch already owns that variable's final state)
+- [x] #2 A new test in nom-core/src/config.rs's #[cfg(test)] mod tests proves the bug is fixed: set XDG_CONFIG_HOME to a known value before constructing TestGuard, use the guard to point at a different temp dir, drop the guard, and assert XDG_CONFIG_HOME is back to the original known value (not unset)
+- [x] #3 nom-mcp/src/bin/nom-mcp-remote.rs's TestGuard is no longer a separate verbatim copy — either it re-uses a shared implementation exposed from nom-core (e.g. via a #[cfg(test)] pub test_support module gated behind a dev-dependency on nom-core with its test-support feature enabled) or, if cross-crate sharing proves impractical within this ticket's scope, both copies are fixed identically and a comment on each references the other as the sibling implementation that must stay in sync
+- [x] #4 nix develop -c cargo test -p nom-core passes
+- [x] #5 nix develop -c cargo test -p nom-mcp passes
+- [x] #6 nix develop -c cargo clippy --workspace --all-targets is clean
 <!-- AC:END -->
 
 ## Implementation Plan
