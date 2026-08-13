@@ -72,20 +72,7 @@ async fn build_weight_summary(
         .await
         .map_err(|e| ErrorData::storage_failure(format!("failed to read row: {e}")))?
     {
-        Some(row) => Ok(WeightEntrySummary {
-            id: row
-                .get::<i64>(0)
-                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-            logged_at: row
-                .get::<String>(1)
-                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-            logged_date: row
-                .get::<String>(2)
-                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-            value: row
-                .get::<f64>(3)
-                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-        }),
+        Some(row) => weight_entry_summary_from_row(&row),
         None => Err(ErrorData::not_found()),
     }
 }

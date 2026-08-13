@@ -3,9 +3,11 @@ id: TASK-31
 title: >-
   Fix: build_weight_summary duplicates weight_entry_summary_from_row's
   row-mapping logic
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@ralph'
 created_date: '2026-08-13 05:26'
+updated_date: '2026-08-13 05:31'
 labels:
   - review-followup
 dependencies:
@@ -22,10 +24,10 @@ Found while reviewing TASK-27 (nom-core/src/weight/mod.rs:38-91). TASK-27's fixu
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 build_weight_summary's Some(row) branch calls weight_entry_summary_from_row(&row) instead of re-listing each row.get::<T>(n) call
-- [ ] #2 No behavior change: UpdateWeightEntry's post-update fetch still returns the same WeightEntrySummary shape
-- [ ] #3 nix develop -c cargo test -p nom-core passes
-- [ ] #4 nix develop -c cargo clippy --workspace --all-targets is clean
+- [x] #1 build_weight_summary's Some(row) branch calls weight_entry_summary_from_row(&row) instead of re-listing each row.get::<T>(n) call
+- [x] #2 No behavior change: UpdateWeightEntry's post-update fetch still returns the same WeightEntrySummary shape
+- [x] #3 nix develop -c cargo test -p nom-core passes
+- [x] #4 nix develop -c cargo clippy --workspace --all-targets is clean
 <!-- AC:END -->
 
 ## Implementation Plan
