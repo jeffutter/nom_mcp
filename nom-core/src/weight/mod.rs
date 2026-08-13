@@ -35,7 +35,10 @@ pub struct WeightEntrySummary {
 }
 
 /// Build a WeightEntrySummary from a single DB row.
-async fn build_weight_summary(conn: &Connection, entry_id: i64) -> Result<WeightEntrySummary, ErrorData> {
+async fn build_weight_summary(
+    conn: &Connection,
+    entry_id: i64,
+) -> Result<WeightEntrySummary, ErrorData> {
     let sql = "SELECT id, logged_at, logged_date, value FROM weight_entries WHERE id = ?";
     let mut stmt = conn
         .prepare(sql)
@@ -51,14 +54,20 @@ async fn build_weight_summary(conn: &Connection, entry_id: i64) -> Result<Weight
         .await
         .map_err(|e| ErrorData::storage_failure(format!("failed to read row: {e}")))?
     {
-        Some(row) => {
-            Ok(WeightEntrySummary {
-                id: row.get::<i64>(0).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-                logged_at: row.get::<String>(1).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-                logged_date: row.get::<String>(2).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-                value: row.get::<f64>(3).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-            })
-        }
+        Some(row) => Ok(WeightEntrySummary {
+            id: row
+                .get::<i64>(0)
+                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+            logged_at: row
+                .get::<String>(1)
+                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+            logged_date: row
+                .get::<String>(2)
+                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+            value: row
+                .get::<f64>(3)
+                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+        }),
         None => Err(ErrorData::not_found()),
     }
 }
@@ -174,9 +183,9 @@ impl Operation for LogWeight {
             .map_err(|e| ErrorData::storage_failure(format!("failed to read result: {e}")))?
         {
             Some(row) => {
-                let value = row
-                    .get_value(0)
-                    .map_err(|e| ErrorData::storage_failure(format!("failed to read entry_id: {e}")))?;
+                let value = row.get_value(0).map_err(|e| {
+                    ErrorData::storage_failure(format!("failed to read entry_id: {e}"))
+                })?;
                 match value {
                     turso::Value::Integer(id) => id,
                     other => {
@@ -188,7 +197,9 @@ impl Operation for LogWeight {
                 }
             }
             None => {
-                return Err(ErrorData::storage_failure("insert returned no row".to_string()));
+                return Err(ErrorData::storage_failure(
+                    "insert returned no row".to_string(),
+                ));
             }
         };
 

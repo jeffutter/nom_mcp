@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@ralph'
 created_date: '2026-08-11 13:24'
-updated_date: '2026-08-13 01:40'
+updated_date: '2026-08-13 02:04'
 labels:
   - planned
 dependencies:
@@ -84,3 +84,17 @@ Integration tests alongside meal tests using `TempDb` fixture. Test each operati
 ### Execution Order
 Single atomic implementation — create weight module, wire into lib.rs, register in main.rs, add tests. No intermediate shippable increments that make sense alone.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Created nom-core/src/weight/mod.rs with 6 operations: LogWeight, UpdateWeightEntry, DeleteWeightEntry, GetWeightToday, GetWeightByDate, GetWeightByDateRange. All follow meal module patterns (request structs with Deserialize/JsonSchema, Operation trait impl, db_path for tests). Added WeightEntrySummary shared type and build_weight_summary helper. Registered all 6 ops in nom-mcp main.rs. Full test suite passes (170 tests).
+
+Fixup applied post-review: ran cargo fmt on nom-core/src/weight/mod.rs — the file as shipped failed cargo fmt --check (a CI gate per TASK-6), purely mechanical rewrap, no behavior change.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented 6 weight entry operations in nom-core/src/weight/mod.rs: log_weight (insert with optional backdating), update_weight_entry (conditional patch of value/timestamp), delete_weight_entry (hard delete with not-found check), get_weight_today (Clock::today() query), get_weight_by_date (single-date query), get_weight_by_date_range (inclusive range query). All operations follow meal module patterns with proper error handling, transaction wrapping, and test support. Registered in nom-mcp main.rs.
+<!-- SECTION:FINAL_SUMMARY:END -->
