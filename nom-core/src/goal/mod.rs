@@ -769,6 +769,121 @@ mod tests {
         Clock { tz: chrono_tz::UTC }
     }
 
+    // ---- Pure unit tests: nutrient_progress / weight_progress (no I/O) ----
+
+    #[test]
+    fn test_nutrient_progress_no_target() {
+        let p = nutrient_progress(150.0, None, Some(Direction::Target));
+        assert_eq!(p.consumed, 150.0);
+        assert!(p.target.is_none());
+        assert!(p.remaining.is_none());
+        assert!(p.percent.is_none());
+        assert!(p.status.is_none());
+        // Direction is passed through unchanged even with no target.
+        assert_eq!(p.direction, Some(Direction::Target));
+    }
+
+    #[test]
+    fn test_nutrient_progress_under_target() {
+        let p = nutrient_progress(60.0, Some(100.0), Some(Direction::Minimum));
+        assert_eq!(p.target, Some(100.0));
+        assert_eq!(p.remaining, Some(40.0));
+        assert_eq!(p.percent, Some(60.0));
+        assert_eq!(p.status, Some(ProgressStatus::Under));
+        assert_eq!(p.direction, Some(Direction::Minimum));
+    }
+
+    #[test]
+    fn test_nutrient_progress_over_target() {
+        let p = nutrient_progress(120.0, Some(100.0), Some(Direction::Maximum));
+        assert_eq!(p.remaining, Some(-20.0));
+        assert_eq!(p.percent, Some(120.0));
+        assert_eq!(p.status, Some(ProgressStatus::Over));
+        assert_eq!(p.direction, Some(Direction::Maximum));
+    }
+
+    #[test]
+    fn test_nutrient_progress_exactly_met() {
+        let p = nutrient_progress(100.0, Some(100.0), Some(Direction::Target));
+        assert_eq!(p.remaining, Some(0.0));
+        assert_eq!(p.percent, Some(100.0));
+        assert_eq!(p.status, Some(ProgressStatus::Met));
+    }
+
+    /// The implementation treats a difference smaller than the 1e-9 epsilon
+    /// as "met" rather than "under"/"over" — verify the boundary directly
+    /// rather than relying on exact floating-point equality.
+    #[test]
+    fn test_nutrient_progress_epsilon_boundary_counts_as_met() {
+        let p = nutrient_progress(99.999_999_999_5, Some(100.0), Some(Direction::Target));
+        assert_eq!(p.status, Some(ProgressStatus::Met));
+    }
+
+    #[test]
+    fn test_nutrient_progress_zero_target_guards_div_by_zero() {
+        let p = nutrient_progress(10.0, Some(0.0), None);
+        // percent is None (would otherwise divide by zero)...
+        assert!(p.percent.is_none());
+        // ...but remaining/status are still computed normally.
+        assert_eq!(p.remaining, Some(-10.0));
+        assert_eq!(p.status, Some(ProgressStatus::Over));
+        assert!(p.direction.is_none());
+    }
+
+    #[test]
+    fn test_nutrient_progress_direction_variants_pass_through() {
+        for dir in [Direction::Target, Direction::Minimum, Direction::Maximum] {
+            let p = nutrient_progress(50.0, Some(50.0), Some(dir.clone()));
+            assert_eq!(p.direction, Some(dir));
+        }
+    }
+
+    #[test]
+    fn test_weight_progress_both_none() {
+        let p = weight_progress(None, None);
+        assert!(p.remaining.is_none());
+        assert!(p.status.is_none());
+    }
+
+    #[test]
+    fn test_weight_progress_only_latest() {
+        let p = weight_progress(Some(180.0), None);
+        assert!(p.remaining.is_none());
+        assert!(p.status.is_none());
+    }
+
+    #[test]
+    fn test_weight_progress_only_target() {
+        let p = weight_progress(None, Some(170.0));
+        assert!(p.remaining.is_none());
+        assert!(p.status.is_none());
+    }
+
+    #[test]
+    fn test_weight_progress_status_over() {
+        // latest_weight (180) is above target_weight (170): remaining = tw -
+        // lw is negative, so status is "over" — current weight exceeds target.
+        let p = weight_progress(Some(180.0), Some(170.0));
+        assert_eq!(p.remaining, Some(-10.0));
+        assert_eq!(p.status, Some(ProgressStatus::Over));
+    }
+
+    #[test]
+    fn test_weight_progress_status_under() {
+        // latest_weight (165) is below target_weight (170): remaining is
+        // positive, so status is "under" — still short of the target.
+        let p = weight_progress(Some(165.0), Some(170.0));
+        assert_eq!(p.remaining, Some(5.0));
+        assert_eq!(p.status, Some(ProgressStatus::Under));
+    }
+
+    #[test]
+    fn test_weight_progress_exactly_met() {
+        let p = weight_progress(Some(170.0), Some(170.0));
+        assert_eq!(p.remaining, Some(0.0));
+        assert_eq!(p.status, Some(ProgressStatus::Met));
+    }
+
     // ---- SetNutritionGoals tests (AC #1) ----
 
     #[serial_test::serial]

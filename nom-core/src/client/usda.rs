@@ -16,17 +16,22 @@ use url::Url;
 // ---------------------------------------------------------------------------
 
 /// Canonical nutrient IDs used by the USDA FDC API.
+///
+/// The live API reports `nutrient.number` as a JSON string (e.g. `"208"`,
+/// and non-integer values like `"269.3"` for some derived nutrients), not a
+/// number — confirmed against a real `/v1/food/{fdcId}` response. These
+/// constants are therefore `&str`, matching `NutrientInfo::number`'s type.
 pub mod nutrients {
     /// Energy (kcal) — must also match unitName="kcal" to exclude kJ entries.
-    pub const ENERGY_KCAL: i64 = 208;
+    pub const ENERGY_KCAL: &str = "208";
     /// Protein (g).
-    pub const PROTEIN: i64 = 203;
+    pub const PROTEIN: &str = "203";
     /// Total fat (g).
-    pub const FAT: i64 = 204;
+    pub const FAT: &str = "204";
     /// Carbohydrate, by difference (g).
-    pub const CARBS: i64 = 205;
+    pub const CARBS: &str = "205";
     /// Fiber, total dietary (g).
-    pub const FIBER: i64 = 291;
+    pub const FIBER: &str = "291";
 }
 
 /// Data types we query — excludes Branded.
@@ -56,16 +61,22 @@ pub enum FdcError {
 // ---------------------------------------------------------------------------
 
 /// Top-level search response wrapper.
+///
+/// Field names confirmed against a real `/v1/foods/search` response: the
+/// match array is returned under the key `foods` (not `foodMatches`), so
+/// `food_matches` used to fail to deserialize any live response — `#[serde]`
+/// picks it up via `rename`. There is no top-level `pageSize`; the search
+/// page size only appears nested under `foodSearchCriteria.pageSize`, which
+/// nothing in this codebase reads, so that field was dropped rather than
+/// kept as permanently-zero dead data.
 #[derive(Debug, Deserialize)]
 pub struct FdcSearchResponse {
-    #[serde(rename = "foodMatches")]
+    #[serde(rename = "foods", default)]
     pub food_matches: Vec<FdcFoodMatch>,
     #[serde(rename = "totalHits", default)]
     pub total_hits: i64,
     #[serde(rename = "currentPage", default)]
     pub current_page: i64,
-    #[serde(rename = "pageSize", default)]
-    pub page_size: i64,
 }
 
 /// Single food match from search results.
@@ -98,13 +109,6 @@ pub struct FdcFoodDetailResponse {
     pub food_portions: Vec<FdcPortion>,
 }
 
-/// Batch response wrapper — contains array of full food details.
-#[derive(Debug, Deserialize)]
-pub struct FdcBatchResponse {
-    #[serde(default)]
-    pub foods: Vec<FdcFoodDetailResponse>,
-}
-
 /// Individual nutrient entry from foodNutrients array.
 #[derive(Debug, Deserialize)]
 pub struct FdcNutrient {
@@ -115,10 +119,13 @@ pub struct FdcNutrient {
 }
 
 /// Nutrient metadata (name, id, unit).
+///
+/// `number` is a string on the wire (the API reports values like `"208"` and
+/// `"269.3"`), not a JSON number — do not change this to an integer type.
 #[derive(Debug, Deserialize)]
 pub struct NutrientInfo {
     #[serde(default)]
-    pub number: Option<i64>,
+    pub number: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default, rename = "unitName")]
@@ -170,7 +177,9 @@ impl FdcFoodDetailResponse {
 
         for n in &self.food_nutrients {
             let Some(info) = &n.nutrient else { continue };
-            let Some(id) = info.number else { continue };
+            let Some(id) = info.number.as_deref() else {
+                continue;
+            };
             let Some(unit) = &info.unit_name else {
                 continue;
             };
@@ -363,6 +372,10 @@ impl FdcClient {
     ///
     /// POST `/foods` with `{ "fdcIds": [...] }`. Automatically chunks
     /// requests into groups of 20 (the API limit). Returns combined results.
+    ///
+    /// The response body is a bare JSON array of food-detail objects (not
+    /// wrapped in a `{"foods": [...]}` envelope) — confirmed against a real
+    /// `/v1/foods` response.
     pub async fn get_foods_batch(
         &self,
         ids: &[i64],
@@ -391,8 +404,8 @@ impl FdcClient {
                 .await?;
 
             let resp = check_status(resp).await?;
-            let batch: FdcBatchResponse = resp.json().await?;
-            all_foods.extend(batch.foods);
+            let batch: Vec<FdcFoodDetailResponse> = resp.json().await?;
+            all_foods.extend(batch);
         }
 
         Ok(all_foods)
@@ -409,11 +422,21 @@ mod tests {
     use wiremock::matchers::{body_partial_json, method, path, query_param};
     use wiremock::{Mock, ResponseTemplate};
 
+    // -- Fixtures captured from real USDA FDC responses (see
+    // nom-core/tests/fixtures/usda/) — identity (fdcId 2759004, "Lunchmeat,
+    // chicken breast, sliced", Foundation) matches the live example
+    // documented in doc-2 §"Detail endpoints". Full realistic payload shape,
+    // including fields this client doesn't parse.
+
+    const SEARCH_RESPONSE: &str = include_str!("../../tests/fixtures/usda/search_response.json");
+    const FOOD_DETAIL: &str = include_str!("../../tests/fixtures/usda/food_detail.json");
+    const FOOD_BATCH: &str = include_str!("../../tests/fixtures/usda/food_batch.json");
+
     // -- Serde deserialization tests --
 
     fn full_search_response_json() -> &'static str {
         r#"{
-            "foodMatches": [
+            "foods": [
                 {
                     "fdcId": 123456,
                     "description": "Chicken Breast, roasted",
@@ -428,14 +451,16 @@ mod tests {
             ],
             "totalHits": 150,
             "currentPage": 1,
-            "pageNumber": 1,
-            "pageSize": 50
+            "foodSearchCriteria": {
+                "pageNumber": 1,
+                "pageSize": 50
+            }
         }"#
     }
 
     fn minimal_search_response_json() -> &'static str {
         r#"{
-            "foodMatches": [],
+            "foods": [],
             "totalHits": 0
         }"#
     }
@@ -446,12 +471,12 @@ mod tests {
             "description": "Chicken Breast, roasted",
             "dataType": "Foundation",
             "foodNutrients": [
-                {"nutrient": {"number": 208, "name": "Energy", "unitName": "kcal"}, "amount": 231.0},
-                {"nutrient": {"number": 208, "name": "Energy", "unitName": "kJ"}, "amount": 966.0},
-                {"nutrient": {"number": 203, "name": "Protein", "unitName": "g"}, "amount": 31.0},
-                {"nutrient": {"number": 204, "name": "Total lipid (fat)", "unitName": "g"}, "amount": 5.0},
-                {"nutrient": {"number": 205, "name": "Carbohydrate, by difference", "unitName": "g"}, "amount": 0.0},
-                {"nutrient": {"number": 291, "name": "Fiber, total dietary", "unitName": "g"}, "amount": 0.0}
+                {"nutrient": {"number": "208", "name": "Energy", "unitName": "kcal"}, "amount": 231.0},
+                {"nutrient": {"number": "208", "name": "Energy", "unitName": "kJ"}, "amount": 966.0},
+                {"nutrient": {"number": "203", "name": "Protein", "unitName": "g"}, "amount": 31.0},
+                {"nutrient": {"number": "204", "name": "Total lipid (fat)", "unitName": "g"}, "amount": 5.0},
+                {"nutrient": {"number": "205", "name": "Carbohydrate, by difference", "unitName": "g"}, "amount": 0.0},
+                {"nutrient": {"number": "291", "name": "Fiber, total dietary", "unitName": "g"}, "amount": 0.0}
             ],
             "foodPortions": [
                 {"modifier": "", "gramWeight": 140.0, "portionDescription": "1 breast, without skin", "amount": 140.0},
@@ -464,7 +489,7 @@ mod tests {
         r#"{
             "fdcId": 999999,
             "foodNutrients": [
-                {"nutrient": {"number": 208, "name": "Energy", "unitName": "kcal"}, "amount": 150.0}
+                {"nutrient": {"number": "208", "name": "Energy", "unitName": "kcal"}, "amount": 150.0}
             ]
         }"#
     }
@@ -473,17 +498,17 @@ mod tests {
         r#"{"fdcId": 111111}"#
     }
 
+    /// The real `/v1/foods` batch endpoint returns a bare JSON array, not an
+    /// object wrapping a `foods` key — confirmed against a real response.
     fn batch_response_json() -> &'static str {
-        r#"{
-            "foods": [
-                {"fdcId": 100, "foodNutrients": [
-                    {"nutrient": {"number": 208, "name": "Energy", "unitName": "kcal"}, "amount": 200.0}
-                ]},
-                {"fdcId": 200, "foodNutrients": [
-                    {"nutrient": {"number": 208, "name": "Energy", "unitName": "kcal"}, "amount": 250.0}
-                ]}
-            ]
-        }"#
+        r#"[
+            {"fdcId": 100, "foodNutrients": [
+                {"nutrient": {"number": "208", "name": "Energy", "unitName": "kcal"}, "amount": 200.0}
+            ]},
+            {"fdcId": 200, "foodNutrients": [
+                {"nutrient": {"number": "208", "name": "Energy", "unitName": "kcal"}, "amount": 250.0}
+            ]}
+        ]"#
     }
 
     #[test]
@@ -491,7 +516,6 @@ mod tests {
         let resp: FdcSearchResponse = serde_json::from_str(full_search_response_json()).unwrap();
         assert_eq!(resp.total_hits, 150);
         assert_eq!(resp.current_page, 1);
-        assert_eq!(resp.page_size, 50);
         assert_eq!(resp.food_matches.len(), 2);
         assert_eq!(resp.food_matches[0].fdc_id, 123456);
         assert_eq!(
@@ -542,10 +566,10 @@ mod tests {
 
     #[test]
     fn test_deserialize_batch_response() {
-        let resp: FdcBatchResponse = serde_json::from_str(batch_response_json()).unwrap();
-        assert_eq!(resp.foods.len(), 2);
-        assert_eq!(resp.foods[0].fdc_id, 100);
-        assert_eq!(resp.foods[1].fdc_id, 200);
+        let resp: Vec<FdcFoodDetailResponse> = serde_json::from_str(batch_response_json()).unwrap();
+        assert_eq!(resp.len(), 2);
+        assert_eq!(resp[0].fdc_id, 100);
+        assert_eq!(resp[1].fdc_id, 200);
     }
 
     #[test]
@@ -646,28 +670,16 @@ mod tests {
                 })
             })
             .collect();
+        // Real API key is "foods", not "foodMatches" — see FdcSearchResponse's doc comment.
         serde_json::json!({
-            "foodMatches": food_matches,
+            "foods": food_matches,
             "totalHits": count as i64,
             "currentPage": 1,
-            "pageNumber": 1,
-            "pageSize": 50
         })
     }
 
-    fn make_detail_json(fdc_id: i64) -> serde_json::Value {
-        serde_json::json!({
-            "fdcId": fdc_id,
-            "description": "Test Food",
-            "dataType": "Foundation",
-            "foodNutrients": [
-                {"nutrient": {"number": 208, "name": "Energy", "unitName": "kcal"}, "amount": 200.0},
-                {"nutrient": {"number": 203, "name": "Protein", "unitName": "g"}, "amount": 15.0}
-            ],
-            "foodPortions": []
-        })
-    }
-
+    /// Real `/v1/foods` batch responses are a bare array — see
+    /// `get_foods_batch`'s doc comment.
     fn make_batch_json(ids: &[i64]) -> serde_json::Value {
         let foods: Vec<serde_json::Value> = ids
             .iter()
@@ -675,12 +687,12 @@ mod tests {
                 serde_json::json!({
                     "fdcId": id,
                     "foodNutrients": [
-                        {"nutrient": {"number": 208, "name": "Energy", "unitName": "kcal"}, "amount": 180.0}
+                        {"nutrient": {"number": "208", "name": "Energy", "unitName": "kcal"}, "amount": 180.0}
                     ]
                 })
             })
             .collect();
-        serde_json::json!({ "foods": foods })
+        serde_json::Value::Array(foods)
     }
 
     // -- Integration tests with wiremock --
@@ -696,22 +708,23 @@ mod tests {
                 serde_json::json!({"dataType": DATA_TYPES}),
             ))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(make_search_json(&["Chicken Breast", "Chicken Thigh"])),
+                ResponseTemplate::new(200).set_body_raw(SEARCH_RESPONSE, "application/json"),
             )
             .expect(1)
             .mount(&server)
             .await;
 
         let client = FdcClient::new(&base_url, "test-key").unwrap();
-        let result = client.search_foods("chicken", 1).await.unwrap();
+        let result = client.search_foods("chicken breast", 1).await.unwrap();
         assert_eq!(result.food_matches.len(), 2);
-        assert_eq!(result.food_matches[0].fdc_id, 100000);
+        assert_eq!(result.food_matches[0].fdc_id, 2759004);
         assert_eq!(
             result.food_matches[0].description,
-            Some("Chicken Breast".into())
+            Some("Lunchmeat, chicken breast, sliced".into())
         );
-        assert_eq!(result.total_hits, 2);
+        assert_eq!(result.food_matches[0].data_type, Some("Foundation".into()));
+        assert_eq!(result.food_matches[1].fdc_id, 171077);
+        assert_eq!(result.total_hits, 886);
     }
 
     #[tokio::test]
@@ -738,18 +751,28 @@ mod tests {
         let base_url = server.uri();
 
         Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(make_detail_json(123456)))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(FOOD_DETAIL, "application/json"))
             .expect(1)
             .mount(&server)
             .await;
 
         let client = FdcClient::new(&base_url, "test-key").unwrap();
-        let result = client.get_food(123456).await.unwrap();
-        assert_eq!(result.fdc_id, 123456);
-        assert_eq!(result.description, Some("Test Food".into()));
+        let result = client.get_food(2759004).await.unwrap();
+        assert_eq!(result.fdc_id, 2759004);
+        assert_eq!(
+            result.description,
+            Some("Lunchmeat, chicken breast, sliced".into())
+        );
         let macros = result.extract_macros();
-        assert_eq!(macros.energy_kcal, Some(200.0));
-        assert_eq!(macros.protein_g, Some(15.0));
+        assert_eq!(macros.energy_kcal, Some(104.0));
+        assert_eq!(macros.protein_g, Some(17.8));
+        assert_eq!(macros.fat_g, Some(1.9));
+        assert_eq!(macros.carbs_g, Some(3.4));
+        assert_eq!(macros.fiber_g, Some(0.0));
+        let portions = result.portion_info();
+        assert_eq!(portions.len(), 2);
+        assert_eq!(portions[0].gram_weight, 56.0);
+        assert_eq!(portions[0].description, Some("2 slices".into()));
     }
 
     #[tokio::test]
@@ -774,16 +797,16 @@ mod tests {
         let base_url = server.uri();
 
         Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(make_batch_json(&[100, 200])))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(FOOD_BATCH, "application/json"))
             .expect(1)
             .mount(&server)
             .await;
 
         let client = FdcClient::new(&base_url, "test-key").unwrap();
-        let result = client.get_foods_batch(&[100, 200]).await.unwrap();
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].fdc_id, 100);
-        assert_eq!(result[1].fdc_id, 200);
+        let result = client.get_foods_batch(&[2759004]).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].fdc_id, 2759004);
+        assert_eq!(result[0].extract_macros().energy_kcal, Some(104.0));
     }
 
     #[tokio::test]

@@ -961,11 +961,12 @@ mod tests {
         .await
         .unwrap();
 
-        // USDA search returns empty
+        // USDA search returns empty. Real API returns matches under "foods",
+        // not "foodMatches" — see FdcSearchResponse's doc comment.
         Mock::given(method("POST"))
             .and(path("/v1/foods/search"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "foodMatches": [],
+                "foods": [],
                 "totalHits": 0
             })))
             .expect(1)
@@ -994,11 +995,12 @@ mod tests {
         let server = wiremock::MockServer::start().await;
         let base_url = server.uri();
 
-        // USDA search returns matches
+        // USDA search returns matches. Real API returns matches under "foods",
+        // not "foodMatches" — see FdcSearchResponse's doc comment.
         Mock::given(method("POST"))
             .and(path("/v1/foods/search"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "foodMatches": [
+                "foods": [
                     {"fdcId": 100000, "description": "Chicken Breast", "dataType": "Foundation"}
                 ],
                 "totalHits": 1
@@ -1007,27 +1009,27 @@ mod tests {
             .mount(&server)
             .await;
 
-        // USDA batch detail
+        // USDA batch detail. Real /v1/foods response is a bare array, not
+        // wrapped in {"foods": [...]} — see get_foods_batch's doc comment.
+        // nutrient.number is a string on the wire ("208"), not an int.
         Mock::given(method("POST"))
             .and(path("/v1/foods"))
             .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "foods": [{
-                        "fdcId": 100000,
-                        "description": "Chicken Breast",
-                        "dataType": "Foundation",
-                        "foodNutrients": [
-                            {"nutrient": {"number": 208, "name": "Energy", "unitName": "kcal"}, "amount": 231.0},
-                            {"nutrient": {"number": 203, "name": "Protein", "unitName": "g"}, "amount": 31.0},
-                            {"nutrient": {"number": 204, "name": "Total lipid (fat)", "unitName": "g"}, "amount": 5.0},
-                            {"nutrient": {"number": 205, "name": "Carbohydrate, by difference", "unitName": "g"}, "amount": 0.0},
-                            {"nutrient": {"number": 291, "name": "Fiber, total dietary", "unitName": "g"}, "amount": 0.0}
-                        ],
-                        "foodPortions": [
-                            {"modifier": "", "gramWeight": 140.0, "portionDescription": "1 breast", "amount": 140.0}
-                        ]
-                    }]
-                })),
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                    "fdcId": 100000,
+                    "description": "Chicken Breast",
+                    "dataType": "Foundation",
+                    "foodNutrients": [
+                        {"nutrient": {"number": "208", "name": "Energy", "unitName": "kcal"}, "amount": 231.0},
+                        {"nutrient": {"number": "203", "name": "Protein", "unitName": "g"}, "amount": 31.0},
+                        {"nutrient": {"number": "204", "name": "Total lipid (fat)", "unitName": "g"}, "amount": 5.0},
+                        {"nutrient": {"number": "205", "name": "Carbohydrate, by difference", "unitName": "g"}, "amount": 0.0},
+                        {"nutrient": {"number": "291", "name": "Fiber, total dietary", "unitName": "g"}, "amount": 0.0}
+                    ],
+                    "foodPortions": [
+                        {"modifier": "", "gramWeight": 140.0, "portionDescription": "1 breast", "amount": 140.0}
+                    ]
+                }])),
             )
             .expect(1)
             .mount(&server)
@@ -1253,11 +1255,12 @@ mod tests {
         .await
         .unwrap();
 
-        // USDA search returns empty
+        // USDA search returns empty. Real API returns matches under "foods",
+        // not "foodMatches" — see FdcSearchResponse's doc comment.
         Mock::given(method("POST"))
             .and(path("/v1/foods/search"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "foodMatches": [],
+                "foods": [],
                 "totalHits": 0
             })))
             .expect(1)

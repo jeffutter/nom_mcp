@@ -1,0 +1,201 @@
+[
+    {
+        "fdcId": 2759004,
+        "description": "Lunchmeat, chicken breast, sliced",
+        "publicationDate": "2026-04-30",
+        "dataType": "Foundation",
+        "foodClass": "FinalFood",
+        "ndbNumber": 100423,
+        "isHistoricalReference": false,
+        "foodCategory": {
+            "id": 25,
+            "code": "2500",
+            "description": "Sausages and Luncheon Meats"
+        },
+        "foodNutrients": [
+            {
+                "type": "FoodNutrient",
+                "id": 35088301,
+                "nutrient": {
+                    "id": 1008,
+                    "number": "208",
+                    "name": "Energy",
+                    "rank": 300,
+                    "unitName": "kcal"
+                },
+                "foodNutrientDerivation": {
+                    "id": 1,
+                    "code": "A",
+                    "description": "Analytical"
+                },
+                "amount": 104.0,
+                "dataPoints": 6,
+                "min": 98.0,
+                "max": 112.0,
+                "median": 103.5
+            },
+            {
+                "type": "FoodNutrient",
+                "id": 35088300,
+                "nutrient": {
+                    "id": 1003,
+                    "number": "203",
+                    "name": "Protein",
+                    "rank": 600,
+                    "unitName": "g"
+                },
+                "foodNutrientDerivation": {
+                    "id": 1,
+                    "code": "A",
+                    "description": "Analytical"
+                },
+                "amount": 17.8,
+                "dataPoints": 6,
+                "min": 16.9,
+                "max": 18.6,
+                "median": 17.75
+            },
+            {
+                "type": "FoodNutrient",
+                "id": 35088302,
+                "nutrient": {
+                    "id": 1004,
+                    "number": "204",
+                    "name": "Total lipid (fat)",
+                    "rank": 800,
+                    "unitName": "g"
+                },
+                "foodNutrientDerivation": {
+                    "id": 1,
+                    "code": "A",
+                    "description": "Analytical"
+                },
+                "amount": 1.9,
+                "dataPoints": 6,
+                "min": 1.4,
+                "max": 2.6,
+                "median": 1.85
+            },
+            {
+                "type": "FoodNutrient",
+                "id": 35088303,
+                "nutrient": {
+                    "id": 1005,
+                    "number": "205",
+                    "name": "Carbohydrate, by difference",
+                    "rank": 1110,
+                    "unitName": "g"
+                },
+                "foodNutrientDerivation": {
+                    "id": 2,
+                    "code": "CD",
+                    "description": "Calculated or derived"
+                },
+                "amount": 3.4,
+                "dataPoints": 0
+            },
+            {
+                "type": "FoodNutrient",
+                "id": 35088304,
+                "nutrient": {
+                    "id": 1079,
+                    "number": "291",
+                    "name": "Fiber, total dietary",
+                    "rank": 1200,
+                    "unitName": "g"
+                },
+                "foodNutrientDerivation": {
+                    "id": 1,
+                    "code": "A",
+                    "description": "Analytical"
+                },
+                "amount": 0.0,
+                "dataPoints": 6,
+                "min": 0.0,
+                "max": 0.0,
+                "median": 0.0
+            },
+            {
+                "type": "FoodNutrient",
+                "id": 35088257,
+                "nutrient": {
+                    "id": 1051,
+                    "number": "255",
+                    "name": "Water",
+                    "rank": 100,
+                    "unitName": "g"
+                },
+                "foodNutrientDerivation": {
+                    "id": 1,
+                    "code": "A",
+                    "description": "Analytical"
+                },
+                "amount": 74.53,
+                "dataPoints": 6,
+                "min": 72.95,
+                "max": 76.25,
+                "median": 74.35
+            },
+            {
+                "type": "FoodNutrient",
+                "id": 35088258,
+                "nutrient": {
+                    "id": 1093,
+                    "number": "307",
+                    "name": "Sodium, Na",
+                    "rank": 5800,
+                    "unitName": "mg"
+                },
+                "foodNutrientDerivation": {
+                    "id": 1,
+                    "code": "A",
+                    "description": "Analytical"
+                },
+                "amount": 1080.0,
+                "dataPoints": 6,
+                "min": 990.0,
+                "max": 1150.0,
+                "median": 1075.0
+            }
+        ],
+        "foodPortions": [
+            {
+                "id": 87919,
+                "amount": 2.0,
+                "dataPoints": 13,
+                "gramWeight": 56.0,
+                "modifier": "slices",
+                "portionDescription": "2 slices",
+                "sequenceNumber": 1,
+                "measureUnit": {
+                    "id": 9999,
+                    "name": "undetermined",
+                    "abbreviation": "undetermined"
+                }
+            },
+            {
+                "id": 87920,
+                "amount": 1.0,
+                "dataPoints": 13,
+                "gramWeight": 28.0,
+                "modifier": "slice",
+                "portionDescription": "1 slice",
+                "sequenceNumber": 2,
+                "measureUnit": {
+                    "id": 9999,
+                    "name": "undetermined",
+                    "abbreviation": "undetermined"
+                }
+            }
+        ],
+        "inputFoods": [],
+        "foodComponents": [],
+        "foodAttributes": [],
+        "nutrientConversionFactors": [
+            {
+                "type": ".ProteinConversionFactor",
+                "value": 6.25
+            }
+        ]
+    }
+]

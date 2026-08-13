@@ -1,0 +1,87 @@
+{
+    "totalHits": 886,
+    "currentPage": 1,
+    "totalPages": 296,
+    "pageList": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    "foodSearchCriteria": {
+        "dataType": ["Foundation", "SR Legacy", "Survey (FNDDS)"],
+        "query": "chicken breast",
+        "generalSearchInput": "chicken breast",
+        "pageNumber": 1,
+        "numberOfResultsPerPage": 50,
+        "pageSize": 50,
+        "requireAllWords": false,
+        "foodTypes": ["Foundation", "SR Legacy", "Survey (FNDDS)"]
+    },
+    "foods": [
+        {
+            "fdcId": 2759004,
+            "description": "Lunchmeat, chicken breast, sliced",
+            "commonNames": "",
+            "additionalDescriptions": "",
+            "dataType": "Foundation",
+            "ndbNumber": 100423,
+            "publishedDate": "2026-04-30",
+            "foodCategory": "Sausages and Luncheon Meats",
+            "mostRecentAcquisitionDate": "2025-12-01",
+            "allHighlightFields": "",
+            "score": 484.71527,
+            "microbes": [],
+            "gtinUpc": null,
+            "foodNutrients": [
+                {
+                    "nutrientId": 1003,
+                    "nutrientName": "Protein",
+                    "nutrientNumber": "203",
+                    "unitName": "G",
+                    "derivationCode": "A",
+                    "derivationDescription": "Analytical",
+                    "value": 17.8,
+                    "foodNutrientId": 35088300
+                },
+                {
+                    "nutrientId": 1008,
+                    "nutrientName": "Energy",
+                    "nutrientNumber": "208",
+                    "unitName": "KCAL",
+                    "derivationCode": "A",
+                    "derivationDescription": "Analytical",
+                    "value": 104.0,
+                    "foodNutrientId": 35088301
+                }
+            ]
+        },
+        {
+            "fdcId": 171077,
+            "description": "Chicken, broiler or fryers, breast, skinless, boneless, meat only, raw",
+            "dataType": "SR Legacy",
+            "ndbNumber": 5062,
+            "publishedDate": "2019-04-01",
+            "foodCategory": "Poultry Products",
+            "score": 421.33218,
+            "gtinUpc": null,
+            "foodNutrients": [
+                {
+                    "nutrientId": 1003,
+                    "nutrientName": "Protein",
+                    "nutrientNumber": "203",
+                    "unitName": "G",
+                    "value": 22.5,
+                    "foodNutrientId": 172058
+                },
+                {
+                    "nutrientId": 1008,
+                    "nutrientName": "Energy",
+                    "nutrientNumber": "208",
+                    "unitName": "KCAL",
+                    "value": 120.0,
+                    "foodNutrientId": 172059
+                }
+            ]
+        }
+    ],
+    "aggregations": {
+        "dataTypes": {"Foundation": 12, "SR Legacy": 340, "Survey (FNDDS)": 534},
+        "nutrients": {}
+    }
+}
