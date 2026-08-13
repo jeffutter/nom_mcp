@@ -108,34 +108,43 @@ impl McpHandler {
     /// Kept as a plain inherent method (mirroring `build_tools`/
     /// `dispatch_read_resource`) so tests can call it directly without
     /// constructing a `RequestContext<RoleServer>`.
-    pub(crate) async fn build_tools_gated(&self) -> Result<Vec<Tool>, ErrorData> {
+    ///
+    /// The widget-display setting is a cosmetic nicety, not a prerequisite
+    /// for tool discovery: any failure opening the DB or reading the
+    /// setting is treated the same as "no settings row" (gating disabled),
+    /// logged and otherwise ignored, so a DB hiccup never removes tools
+    /// from `tools/list`.
+    pub(crate) async fn build_tools_gated(&self) -> Vec<Tool> {
         let mut tools = self.build_tools();
 
         #[cfg(test)]
         let conn = if let Some(ref path) = self.db_path {
-            Connection::open_at(path).await.map_err(|e| {
-                ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("failed to open db: {e}"), None)
-            })?
+            Connection::open_at(path).await
         } else {
-            Connection::open().await.map_err(|e| {
-                ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("failed to open db: {e}"), None)
-            })?
+            Connection::open().await
         };
 
         #[cfg(not(test))]
-        let conn = Connection::open().await.map_err(|e| {
-            ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("failed to open db: {e}"), None)
-        })?;
+        let conn = Connection::open().await;
 
-        let widget_display_enabled = crate::widget::widget_display_enabled(&conn)
-            .await
-            .map_err(|e| {
-                ErrorData::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("failed to read widget display setting: {e}"),
-                    None,
-                )
-            })?;
+        let widget_display_enabled = match conn {
+            Ok(conn) => crate::widget::widget_display_enabled(&conn)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        error = %e,
+                        "failed to read widget-display setting; defaulting to disabled"
+                    );
+                    false
+                }),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "failed to open db for widget-display gating; defaulting to disabled"
+                );
+                false
+            }
+        };
 
         if widget_display_enabled
             && let Some(tool) = tools
@@ -145,7 +154,7 @@ impl McpHandler {
             tool.meta = Some(goal_progress_ui_meta());
         }
 
-        Ok(tools)
+        tools
     }
 
     /// Build the list of MCP resources this handler exposes.
@@ -304,7 +313,7 @@ impl ServerHandler for McpHandler {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(self.build_tools_gated().await?))
+        Ok(ListToolsResult::with_all_items(self.build_tools_gated().await))
     }
 
     async fn call_tool(
@@ -567,7 +576,7 @@ mod tests {
         let db = TempDb::new().await;
         let handler = handler_with_goal_progress(db.path.clone());
 
-        let tools = handler.build_tools_gated().await.unwrap();
+        let tools = handler.build_tools_gated().await;
 
         let goal_progress = tools
             .iter()
@@ -597,7 +606,7 @@ mod tests {
             .unwrap();
 
         let handler = handler_with_goal_progress(db.path.clone());
-        let tools = handler.build_tools_gated().await.unwrap();
+        let tools = handler.build_tools_gated().await;
 
         let goal_progress = tools
             .iter()
@@ -617,6 +626,40 @@ mod tests {
             .iter()
             .find(|t| t.name.as_ref() == "test-op")
             .expect("test-op should be registered");
+        assert!(test_op.meta.is_none());
+    }
+
+    /// TASK-44: a DB-open failure while resolving the widget-display
+    /// setting must not take down `tools/list` for every other tool — it
+    /// should be treated exactly like "no settings row" (gating disabled).
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_list_tools_db_open_failure_falls_back_to_no_gating() {
+        let dir = tempfile::TempDir::with_prefix("nom_test").unwrap();
+        // A plain file where a directory is expected: `Connection::open_at`
+        // calls `create_dir_all` on the db path's parent, which fails when
+        // that parent already exists as a regular file — a reliable,
+        // permission-independent way to force an open error.
+        let blocking_file = dir.path().join("not_a_dir");
+        std::fs::write(&blocking_file, b"not a directory").unwrap();
+        let bad_db_path = blocking_file.join("unreachable.db");
+
+        let handler = handler_with_goal_progress(bad_db_path);
+        let tools = handler.build_tools_gated().await;
+
+        let goal_progress = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "get_goal_progress")
+            .expect("get_goal_progress should still be discoverable");
+        assert!(
+            goal_progress.meta.is_none(),
+            "gating should default to disabled when the DB can't be opened"
+        );
+
+        let test_op = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "test-op")
+            .expect("unrelated tool must remain discoverable despite the DB failure");
         assert!(test_op.meta.is_none());
     }
 
