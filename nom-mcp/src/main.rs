@@ -3,6 +3,7 @@
 //! Local-CLI path: parses arguments, dispatches to operations, renders errors
 //! through the shared `cli_exit`/`render_error` functions from `nom-core`.
 
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 
 use nom_core::client::{off::OffClient, usda::FdcClient};
@@ -178,6 +179,33 @@ fn run_serve_stdio() -> Result<(), Box<dyn std::error::Error>> {
     })
 }
 
+/// Resolve a configured bind address (IPv4/IPv6 literal, or hostname) plus a
+/// port into a concrete `SocketAddr`.
+///
+/// `bind_address` is tried as a bare IP literal first — this is the common
+/// case (`127.0.0.1`, `::1`, `::`) and avoids the ambiguity of naively
+/// joining an IPv6 literal with `:port` (e.g. `::1:8000`, which
+/// `SocketAddr`/`TcpListener` parsing rejects since a bare IPv6 literal must
+/// be bracketed before a port is appended). If it isn't a bare IP literal —
+/// e.g. a hostname like `localhost` — it falls back to `ToSocketAddrs`
+/// resolution of `"{bind_address}:{port}"`, matching what
+/// `TcpListener::bind(&str)` did implicitly before this function existed.
+fn resolve_bind_addr(bind_address: &str, port: u16) -> std::io::Result<SocketAddr> {
+    if let Ok(ip) = bind_address.parse::<std::net::IpAddr>() {
+        return Ok(SocketAddr::new(ip, port));
+    }
+
+    format!("{bind_address}:{port}")
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("could not resolve bind address: {bind_address}"),
+            )
+        })
+}
+
 /// Run nom-mcp as an HTTP server exposing both the REST API (`/api/*`) and a
 /// streamable-HTTP MCP endpoint (`/mcp`) on a single listener, sharing the
 /// same registry/clock construction path as the stdio serve mode. Logs go to
@@ -209,8 +237,8 @@ fn run_serve_http(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         let router = nom_core::operation::http_router::build_http_router(registry)
             .nest_service("/mcp", mcp_service);
 
-        let addr = format!("{bind_address}:{port}");
-        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        let addr = resolve_bind_addr(&bind_address, port)?;
+        let listener = tokio::net::TcpListener::bind(addr).await?;
         tracing::info!(%addr, "nom-mcp HTTP serve mode listening (REST at /api/*, MCP at /mcp)");
 
         axum::serve(listener, router.into_make_service())
@@ -270,5 +298,32 @@ mod tests {
             parse_serve_mode(&args(&["nom-mcp", "serve", "bogus"])),
             ServeMode::Unknown("bogus".to_string())
         );
+    }
+
+    #[test]
+    fn test_resolve_bind_addr_ipv4_literal() {
+        let addr = resolve_bind_addr("127.0.0.1", 8000).unwrap();
+        assert_eq!(addr.to_string(), "127.0.0.1:8000");
+    }
+
+    #[test]
+    fn test_resolve_bind_addr_ipv6_loopback() {
+        let addr = resolve_bind_addr("::1", 8000).unwrap();
+        assert_eq!(addr.to_string(), "[::1]:8000");
+    }
+
+    #[test]
+    fn test_resolve_bind_addr_ipv6_unspecified() {
+        let addr = resolve_bind_addr("::", 8000).unwrap();
+        assert_eq!(addr.to_string(), "[::]:8000");
+    }
+
+    #[test]
+    fn test_resolve_bind_addr_hostname_resolves_via_fallback() {
+        // "localhost" isn't a bare IP literal, so this exercises the
+        // ToSocketAddrs fallback path rather than the literal-parse path.
+        let addr = resolve_bind_addr("localhost", 8000).unwrap();
+        assert_eq!(addr.port(), 8000);
+        assert!(addr.ip().is_loopback());
     }
 }
