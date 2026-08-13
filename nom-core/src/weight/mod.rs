@@ -491,7 +491,7 @@ impl Operation for DeleteWeightEntry {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct GetWeightTodayRequest;
+struct GetWeightTodayRequest {}
 
 pub struct GetWeightToday {
     clock: Clock,

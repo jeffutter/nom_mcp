@@ -97,6 +97,8 @@ A single `OperationRegistry` (`nom-core/src/operation/registry.rs`) holds `Vec<A
 
 Adding an operation and registering it once (see `build_registry()` in `nom-mcp/src/main.rs`) makes it appear on every surface it declares — this is what closes CLI/HTTP/MCP drift by construction. When adding a new domain action, implement `Operation` in the relevant entity module (`food`, `meal`, `weight`, `goal`, `widget`) and register it in `nom-mcp/src/main.rs`; do not hand-write a separate CLI arg parser, HTTP handler, or MCP tool definition. Widget display operations (`get_widget_display`, `set_widget_display`) are the one exception that restricts `surfaces()` to `Surfaces::MCP` only — they don't make sense as local-CLI or REST actions.
 
+For fieldless request structs backing `input_schema()`, use `struct FooRequest {}`, not a unit struct (`struct FooRequest;`) — schemars derives `{"type": "null"}` for the latter, which MCP clients reject since `inputSchema.type` must be `"object"`.
+
 `nom-mcp-remote` is a *separate* binary that does not use the registry at all — it POSTs directly to `/api/{operation}` on a configured remote server and renders the response through the same `cli_exit`/`render_error` functions, so its output is byte-identical to local-CLI output.
 
 ### `serve`: stdio and HTTP transports

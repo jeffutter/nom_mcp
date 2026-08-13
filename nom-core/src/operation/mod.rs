@@ -60,6 +60,11 @@ pub trait Operation: Send + Sync {
 
     /// JSON Schema describing the expected input parameters.
     /// Derived from request structs using `schemars::JsonSchema`.
+    ///
+    /// For a fieldless request, use `struct FooRequest {}`, never a unit
+    /// struct (`struct FooRequest;`) — schemars emits `{"type": "null"}` for
+    /// unit structs instead of `{"type": "object"}`, and MCP clients reject
+    /// tools whose `inputSchema.type` isn't `"object"`.
     fn input_schema(&self) -> Option<serde_json::Value> {
         None
     }
