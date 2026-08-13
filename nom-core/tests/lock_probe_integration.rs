@@ -65,11 +65,12 @@ fn test_probe_locked_file() {
         Err(_) => panic!("child did not ack lock acquisition within 5s"),
     }
 
-    // Defuse RAII guard — we will manage the child explicitly below
-    let mut child = guard.0.take().expect("guard was defused");
+    // Guard stays armed through these assertions — any panic here still needs
+    // the child killed, so defuse only right before the explicit kill below.
+    let child_ref = guard.0.as_mut().expect("guard holds child");
 
     // Verify child is still running (it should be sleeping)
-    match child.try_wait() {
+    match child_ref.try_wait() {
         Ok(Some(status)) => panic!(
             "child exited prematurely with status {:?} — lock setup failed",
             status
@@ -81,6 +82,9 @@ fn test_probe_locked_file() {
     // Probe should detect the lock
     let is_locked = probe_db_lock(&path).expect("probe should succeed");
     assert!(is_locked, "probe should detect child's write lock");
+
+    // Defuse RAII guard — we manage the child explicitly from here on
+    let mut child = guard.0.take().expect("guard was defused");
 
     // Kill the child and verify lock is released
     child.kill().expect("kill child");

@@ -7,7 +7,7 @@ status: Done
 assignee:
   - '@ralph'
 created_date: '2026-08-12 20:22'
-updated_date: '2026-08-13 07:03'
+updated_date: '2026-08-13 07:08'
 labels:
   - review-followup
   - planned
@@ -142,4 +142,6 @@ Note: `reader_thread` joins implicitly when dropped at end of function. No expli
 AC #1 satisfied as part of a review-round fixup to TASK-10's commit (unpushed, folded via git commit --fixup): find_lock_holder() no longer shells out to 'cargo build' or walks directories manually. Replaced with std::env::current_exe() sibling-path resolution (test binary and lock_holder binary are both under target/<profile>/, one level below/above 'deps'), since CARGO_BIN_EXE_lock_holder is unavailable here (unit test module, not an integration test under tests/ -- moving the test wasn't done, so that path wasn't taken). Verified via three consecutive 'nix develop -c cargo test -p nom-core -- --nocapture storage::lock_probe' runs: no 'Compiling' output on runs 2/3, locked-file assertions execute every run. AC #2 (racy fixed-sleep synchronization) and AC #3 (no Drop-guard/panic safety for the spawned child) are UNCHANGED and still need implementing.
 
 AC #2: Replaced fixed 200ms sleep with child-to-parent stdout ack signal. lock_holder.rs writes b"1" to stdout immediately after F_SETLKW succeeds; test reads exactly one byte via piped stdout + mpsc channel with 5s bounded timeout. AC #3: Added ChildGuard RAII wrapper that kills+waits spawned child on drop, defused after successful ack receipt. AC #4 verified: 3 consecutive runs all passed, no recompilation on runs 2/3. AC #5: full nom-core test suite (209 unit + 1 integration) passes.
+
+Fixup applied post-review: ChildGuard was defused (guard.0.take()) immediately after receiving the child's ack signal, before the try_wait()/probe_db_lock().expect()/assert!(is_locked) block that can itself panic — leaving that whole window unprotected and defeating AC #3's guarantee that the child is killed on any panic between spawn and kill. Moved the defuse point to right before the final explicit kill, keeping the guard armed through the assertions. Verified: 3 consecutive runs of 'nix develop -c cargo test -p nom-core --test lock_probe_integration -- --nocapture' pass with no recompilation, plus full 'cargo test -p nom-core' (210 tests) and clippy/fmt clean.
 <!-- SECTION:NOTES:END -->
