@@ -77,6 +77,20 @@ async fn build_weight_summary(
     }
 }
 
+/// Parse an ISO-8601 timestamp string into `(logged_at_str, logged_date_str)`.
+fn parse_logged_at(ts: &str, clock: &Clock) -> Result<(String, String), ErrorData> {
+    let dt: DateTime<Utc> = ts.parse().map_err(|_| {
+        ErrorData::validation(
+            "logged_at",
+            format!("invalid datetime format: {}. Use ISO 8601 format.", ts),
+        )
+    })?;
+    Ok((
+        format!("{}", dt.format("%Y-%m-%dT%H:%M:%SZ")),
+        Clock::format_date(clock.logged_date(&dt)),
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // LogWeight Operation
 // ---------------------------------------------------------------------------
@@ -149,16 +163,7 @@ impl Operation for LogWeight {
 
         // Determine logged_at and logged_date
         let (logged_at_str, logged_date_str) = if let Some(ref ts) = req.logged_at {
-            let dt: DateTime<Utc> = ts.parse().map_err(|_| {
-                ErrorData::validation(
-                    "logged_at",
-                    format!("invalid datetime format: {}. Use ISO 8601 format.", ts),
-                )
-            })?;
-            (
-                format!("{}", dt.format("%Y-%m-%dT%H:%M:%SZ")),
-                Clock::format_date(self.clock.logged_date(&dt)),
-            )
+            parse_logged_at(ts, &self.clock)?
         } else {
             let now = chrono::Utc::now();
             (
@@ -178,7 +183,7 @@ impl Operation for LogWeight {
             .await
             .map_err(|e| ErrorData::storage_failure(format!("prepare failed: {e}")))?;
         let mut rows = stmt
-            .query((logged_at_str.clone(), logged_date_str.clone(), req.value))
+            .query((&logged_at_str[..], &logged_date_str[..], req.value))
             .await
             .map_err(|e| ErrorData::storage_failure(format!("insert failed: {e}")))?;
 
@@ -331,11 +336,7 @@ impl Operation for UpdateWeightEntry {
 
             // Update logged_at/logged_date if provided
             if let Some(ref ts) = req.logged_at {
-                let dt: DateTime<Utc> = ts.parse().map_err(|_| {
-                    ErrorData::validation("logged_at", format!("invalid datetime format: {}", ts))
-                })?;
-                let logged_at_str = format!("{}", dt.format("%Y-%m-%dT%H:%M:%SZ"));
-                let logged_date_str = Clock::format_date(self.clock.logged_date(&dt));
+                let (logged_at_str, logged_date_str) = parse_logged_at(ts, &self.clock)?;
                 conn.execute(
                     "UPDATE weight_entries SET logged_at = ?, logged_date = ? WHERE id = ?",
                     (logged_at_str, logged_date_str, req.entry_id),

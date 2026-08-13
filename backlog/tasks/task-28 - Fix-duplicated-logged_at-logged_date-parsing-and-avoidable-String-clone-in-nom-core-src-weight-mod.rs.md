@@ -3,9 +3,11 @@ id: TASK-28
 title: >-
   Fix: duplicated logged_at/logged_date parsing and avoidable String clone in
   nom-core/src/weight/mod.rs
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@ralph'
 created_date: '2026-08-13 02:07'
+updated_date: '2026-08-13 05:36'
 labels:
   - review-followup
 dependencies:
@@ -22,11 +24,11 @@ Found while reviewing TASK-2.15 (nom-core/src/weight/mod.rs). LogWeight::execute
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A private helper function (e.g. fn parse_logged_at(ts: &str, clock: &Clock) -> Result<(String, String), ErrorData>) in nom-core/src/weight/mod.rs computes the (logged_at_str, logged_date_str) pair from a raw timestamp string, used by both LogWeight and UpdateWeightEntry
-- [ ] #2 LogWeight's default-to-now branch remains LogWeight-specific (not forced into the shared helper) since UpdateWeightEntry has no equivalent default case
-- [ ] #3 LogWeight's INSERT query no longer clones logged_at_str/logged_date_str — it passes borrowed references and the owned Strings are still used afterward for the JSON response
-- [ ] #4 nix develop -c cargo test -p nom-core passes
-- [ ] #5 nix develop -c cargo clippy --workspace --all-targets is clean
+- [x] #1 A private helper function (e.g. fn parse_logged_at(ts: &str, clock: &Clock) -> Result<(String, String), ErrorData>) in nom-core/src/weight/mod.rs computes the (logged_at_str, logged_date_str) pair from a raw timestamp string, used by both LogWeight and UpdateWeightEntry
+- [x] #2 LogWeight's default-to-now branch remains LogWeight-specific (not forced into the shared helper) since UpdateWeightEntry has no equivalent default case
+- [x] #3 LogWeight's INSERT query no longer clones logged_at_str/logged_date_str — it passes borrowed references and the owned Strings are still used afterward for the JSON response
+- [x] #4 nix develop -c cargo test -p nom-core passes
+- [x] #5 nix develop -c cargo clippy --workspace --all-targets is clean
 <!-- AC:END -->
 
 ## Implementation Plan
