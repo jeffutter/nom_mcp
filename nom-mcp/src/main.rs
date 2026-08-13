@@ -20,11 +20,20 @@ use nom_core::weight::{
 use nom_core::widget::{GetWidgetDisplay, SetWidgetDisplay};
 
 fn main() {
-    // The 'serve' subcommand runs a long-lived MCP stdio server instead of the
-    // one-shot local-CLI dispatch; it has its own tracing defaults (info vs
-    // warn) so we branch before initializing logging.
+    // The 'serve' subcommand runs a long-lived MCP server (stdio or HTTP)
+    // instead of the one-shot local-CLI dispatch; it has its own tracing
+    // defaults (info vs warn) so we branch before initializing logging.
     if std::env::args().nth(1).as_deref() == Some("serve") {
-        if let Err(err) = run_serve() {
+        let args: Vec<String> = std::env::args().collect();
+        let result = match parse_serve_mode(&args) {
+            ServeMode::Stdio => run_serve_stdio(),
+            ServeMode::Http { port } => run_serve_http(port),
+            ServeMode::Unknown(mode) => {
+                eprintln!("nom-mcp serve: unknown mode '{mode}' (expected 'stdio' or 'http')");
+                std::process::exit(1);
+            }
+        };
+        if let Err(err) = result {
             eprintln!("nom-mcp serve failed: {err}");
             std::process::exit(1);
         }
@@ -36,6 +45,34 @@ fn main() {
 
     let args: Vec<String> = std::env::args().collect();
     cli_exit(execute_from_args(&args));
+}
+
+/// Which server transport `nom-mcp serve` should run, as parsed from argv.
+#[derive(Debug, PartialEq, Eq)]
+enum ServeMode {
+    Stdio,
+    Http { port: u16 },
+    Unknown(String),
+}
+
+/// Parse `serve [stdio|http [--port N]]` from raw argv (args[0] is the binary
+/// name, args[1] is "serve"). Bare `serve` and `serve stdio` are equivalent
+/// (TASK-34 backward compatibility). Default HTTP port is 8000 (matches
+/// notectl's `serve http` convention; doc-5 states no specific default).
+fn parse_serve_mode(args: &[String]) -> ServeMode {
+    match args.get(2).map(String::as_str) {
+        None | Some("stdio") => ServeMode::Stdio,
+        Some("http") => {
+            let port = args
+                .iter()
+                .position(|a| a == "--port")
+                .and_then(|i| args.get(i + 1))
+                .and_then(|v| v.parse::<u16>().ok())
+                .unwrap_or(8000);
+            ServeMode::Http { port }
+        }
+        Some(other) => ServeMode::Unknown(other.to_string()),
+    }
 }
 
 /// Build the OperationRegistry shared by both the local-CLI path and the MCP
@@ -124,13 +161,13 @@ pub fn execute_from_args(args: &[String]) -> Result<serde_json::Value, ErrorData
 /// Run nom-mcp as a real MCP server over stdio, blocking until the client
 /// disconnects. Logs go to stderr (via `nom_core::logging::init_server`);
 /// stdout is reserved for the MCP JSON-RPC protocol.
-fn run_serve() -> Result<(), Box<dyn std::error::Error>> {
+fn run_serve_stdio() -> Result<(), Box<dyn std::error::Error>> {
     let _ = nom_core::logging::init_server();
 
     let config = AppConfig::load()?;
     let clock = Arc::new(Clock::new(&config)?);
     let (off_client, fdc_client) = build_clients(&config)?;
-    let registry = build_registry(clock.clone(), off_client, fdc_client);
+    let registry = Arc::new(build_registry(clock.clone(), off_client, fdc_client));
     let handler = nom_core::operation::mcp_handler::McpHandler::new(registry, *clock);
 
     tokio::runtime::Runtime::new()?.block_on(async {
@@ -139,4 +176,99 @@ fn run_serve() -> Result<(), Box<dyn std::error::Error>> {
         service.waiting().await?;
         Ok::<_, Box<dyn std::error::Error>>(())
     })
+}
+
+/// Run nom-mcp as an HTTP server exposing both the REST API (`/api/*`) and a
+/// streamable-HTTP MCP endpoint (`/mcp`) on a single listener, sharing the
+/// same registry/clock construction path as the stdio serve mode. Logs go to
+/// stderr (via `nom_core::logging::init_server`), consistent with stdio serve.
+fn run_serve_http(port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    let _ = nom_core::logging::init_server();
+
+    let config = AppConfig::load()?;
+    let clock = Arc::new(Clock::new(&config)?);
+    let (off_client, fdc_client) = build_clients(&config)?;
+    let registry = Arc::new(build_registry(clock.clone(), off_client, fdc_client));
+    let handler = nom_core::operation::mcp_handler::McpHandler::new(registry.clone(), *clock);
+    let bind_address = config.http_bind_address.clone();
+
+    tokio::runtime::Runtime::new()?.block_on(async {
+        use rmcp::transport::streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+        };
+        use tokio_util::sync::CancellationToken;
+
+        let ct = CancellationToken::new();
+        let mcp_config = StreamableHttpServerConfig::default().with_cancellation_token(ct.clone());
+        let mcp_service = StreamableHttpService::new(
+            move || Ok(handler.clone()),
+            Arc::new(LocalSessionManager::default()),
+            mcp_config,
+        );
+
+        let router = nom_core::operation::http_router::build_http_router(registry)
+            .nest_service("/mcp", mcp_service);
+
+        let addr = format!("{bind_address}:{port}");
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        tracing::info!(%addr, "nom-mcp HTTP serve mode listening (REST at /api/*, MCP at /mcp)");
+
+        axum::serve(listener, router.into_make_service())
+            .with_graceful_shutdown(async move {
+                let _ = tokio::signal::ctrl_c().await;
+                ct.cancel();
+            })
+            .await?;
+
+        Ok::<_, Box<dyn std::error::Error>>(())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn test_parse_serve_mode_bare_serve_is_stdio() {
+        assert_eq!(
+            parse_serve_mode(&args(&["nom-mcp", "serve"])),
+            ServeMode::Stdio
+        );
+    }
+
+    #[test]
+    fn test_parse_serve_mode_explicit_stdio() {
+        assert_eq!(
+            parse_serve_mode(&args(&["nom-mcp", "serve", "stdio"])),
+            ServeMode::Stdio
+        );
+    }
+
+    #[test]
+    fn test_parse_serve_mode_http_default_port() {
+        assert_eq!(
+            parse_serve_mode(&args(&["nom-mcp", "serve", "http"])),
+            ServeMode::Http { port: 8000 }
+        );
+    }
+
+    #[test]
+    fn test_parse_serve_mode_http_explicit_port() {
+        assert_eq!(
+            parse_serve_mode(&args(&["nom-mcp", "serve", "http", "--port", "9999"])),
+            ServeMode::Http { port: 9999 }
+        );
+    }
+
+    #[test]
+    fn test_parse_serve_mode_unknown() {
+        assert_eq!(
+            parse_serve_mode(&args(&["nom-mcp", "serve", "bogus"])),
+            ServeMode::Unknown("bogus".to_string())
+        );
+    }
 }

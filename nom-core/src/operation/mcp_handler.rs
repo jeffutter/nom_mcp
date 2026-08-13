@@ -27,6 +27,7 @@ use crate::storage::Connection;
 /// Implements `list_tools` and `call_tool` by iterating the registry directly,
 /// deliberately bypassing rmcp's `#[tool]` macro/ToolRouter.
 /// Also implements resource support for `nom://weekly-summary`.
+#[derive(Clone)]
 pub struct McpHandler {
     registry: Arc<OperationRegistry>,
     clock: Clock,
@@ -35,9 +36,9 @@ pub struct McpHandler {
 }
 
 impl McpHandler {
-    pub fn new(registry: OperationRegistry, clock: Clock) -> Self {
+    pub fn new(registry: Arc<OperationRegistry>, clock: Clock) -> Self {
         Self {
-            registry: Arc::new(registry),
+            registry,
             clock,
             #[cfg(test)]
             db_path: None,
@@ -335,7 +336,7 @@ mod tests {
         let mut reg = OperationRegistry::new(make_clock());
         reg.register(Arc::new(TestOp));
         let clock = Clock { tz: chrono_tz::UTC };
-        let handler = McpHandler::new(reg, clock);
+        let handler = McpHandler::new(Arc::new(reg), clock);
         assert_eq!(
             handler.get_tool("test-op").map(|t| t.name.to_string()),
             Some("test-op".to_string())
@@ -353,7 +354,7 @@ mod tests {
     #[test]
     fn test_empty_registry_list_tools() {
         let clock = Clock { tz: chrono_tz::UTC };
-        let handler = McpHandler::new(OperationRegistry::new(make_clock()), clock);
+        let handler = McpHandler::new(Arc::new(OperationRegistry::new(make_clock())), clock);
         let tools = handler.build_tools();
         assert!(tools.is_empty(), "empty registry should produce no tools");
     }
@@ -373,7 +374,7 @@ mod tests {
         let clock = Clock { tz: chrono_tz::UTC };
         let mut reg = OperationRegistry::new(make_clock());
         reg.register(Arc::new(BadSchemaOp));
-        let handler = McpHandler::new(reg, clock);
+        let handler = McpHandler::new(Arc::new(reg), clock);
         // get_tool should return None for operations with bad schemas (no panic)
         assert!(handler.get_tool("bad-schema-op").is_none());
     }
@@ -384,7 +385,7 @@ mod tests {
         let mut reg = OperationRegistry::new(make_clock());
         reg.register(Arc::new(TestOp));
         reg.register(Arc::new(BadSchemaOp));
-        let handler = McpHandler::new(reg, clock);
+        let handler = McpHandler::new(Arc::new(reg), clock);
 
         let tools = handler.build_tools();
 
@@ -396,7 +397,7 @@ mod tests {
     #[test]
     fn test_build_resources_lists_weekly_summary() {
         let clock = Clock { tz: chrono_tz::UTC };
-        let handler = McpHandler::new(OperationRegistry::new(make_clock()), clock);
+        let handler = McpHandler::new(Arc::new(OperationRegistry::new(make_clock())), clock);
         let resources = handler.build_resources();
         assert_eq!(resources.len(), 1);
         assert_eq!(resources[0].uri, "nom://weekly-summary");
@@ -409,7 +410,7 @@ mod tests {
     async fn test_dispatch_read_resource_returns_weekly_summary_json() {
         let db = TempDb::new().await;
         let clock = Clock { tz: chrono_tz::UTC };
-        let handler = McpHandler::new(OperationRegistry::new(make_clock()), clock)
+        let handler = McpHandler::new(Arc::new(OperationRegistry::new(make_clock())), clock)
             .with_db_path(db.path.clone());
 
         let result = handler.dispatch_read_resource("nom://weekly-summary").await;
@@ -429,7 +430,7 @@ mod tests {
     #[tokio::test]
     async fn test_dispatch_read_resource_unknown_uri_errors() {
         let clock = Clock { tz: chrono_tz::UTC };
-        let handler = McpHandler::new(OperationRegistry::new(make_clock()), clock);
+        let handler = McpHandler::new(Arc::new(OperationRegistry::new(make_clock())), clock);
         let result = handler.dispatch_read_resource("nom://bogus").await;
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("unknown resource URI"));

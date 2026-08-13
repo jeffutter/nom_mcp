@@ -15,8 +15,7 @@ use super::Surfaces;
 ///
 /// Routes are prefixed under `/api` so they can coexist with MCP streamable-HTTP
 /// service at `/mcp`.
-pub fn build_http_router(registry: super::OperationRegistry) -> Router {
-    let registry = Arc::new(registry);
+pub fn build_http_router(registry: Arc<super::OperationRegistry>) -> Router {
     let mut router = Router::new();
 
     for op in registry.filter_by_surface(Surfaces::HTTP) {
@@ -77,7 +76,7 @@ mod tests {
     fn test_build_http_router_has_routes() {
         let mut reg = OperationRegistry::new(Arc::new(Clock { tz: chrono_tz::UTC }));
         reg.register(Arc::new(TestOp));
-        let router = build_http_router(reg);
+        let router = build_http_router(Arc::new(reg));
         // The router should have routes registered
         // We can't easily test axum routes directly, but we verify it builds without panic
         let _ = router;
