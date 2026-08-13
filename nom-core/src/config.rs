@@ -123,12 +123,14 @@ impl AppConfig {
         }
 
         // Environment variables always win (highest priority).
-        // No separator means underscores in env var names are kept literally,
-        // so NOM_MCP_HTTP_BIND_ADDRESS maps to key "http_bind_address".
-        // For nested keys like remote.server_url, use NOM_MCP_remote_server_url.
+        // Flat keys use single underscores for word separation:
+        //   NOM_MCP_HTTP_BIND_ADDRESS -> http_bind_address
+        // Nested keys use double underscore as the nesting separator:
+        //   NOM_MCP_remote__server_url -> remote.server_url
         builder = builder.add_source(
             config::Environment::with_prefix("NOM_MCP")
                 .prefix_separator("_")
+                .separator("__")
                 .try_parsing(true),
         );
 
@@ -421,5 +423,26 @@ timezone = "America/Los_Angeles"
         assert_eq!(config.http_bind_address, "127.0.0.1");
         assert!(config.usda_api_key.is_none());
         assert!(config.timezone.is_none());
+    }
+
+    #[serial_test::serial]
+    #[test]
+    fn test_env_nested_key_via_double_underscore() {
+        let mut guard = TestGuard::new();
+        // Point XDG_CONFIG_HOME at a nonexistent dir so no TOML file is loaded
+        guard.set("XDG_CONFIG_HOME", "/tmp/nom_mcp_nonexistent_nested_test");
+        // Nested key: double underscore separates path components
+        guard.set("NOM_MCP_remote__server_url", "http://example.com:9999");
+        // Flat key: single underscores are preserved within the key name
+        guard.set("NOM_MCP_HTTP_BIND_ADDRESS", "10.0.0.1");
+
+        let config = AppConfig::load().expect("should load");
+        // Nested key should be parsed correctly
+        assert_eq!(
+            config.remote.server_url,
+            Some("http://example.com:9999".to_string())
+        );
+        // Flat key should still work unaffected
+        assert_eq!(config.http_bind_address, "10.0.0.1");
     }
 }
