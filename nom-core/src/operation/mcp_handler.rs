@@ -69,6 +69,87 @@ impl McpHandler {
             })
             .collect()
     }
+
+    /// Build the list of MCP resources this handler exposes.
+    pub(crate) fn build_resources(&self) -> Vec<Resource> {
+        vec![
+            Resource::new("nom://weekly-summary", "weekly-summary")
+                .with_title("Weekly Summary")
+                .with_description("Rolling 7-day nutrition and weight summary")
+                .with_mime_type("application/json"),
+        ]
+    }
+
+    /// Dispatch a resource read by URI, fetching and serializing the
+    /// underlying data. Returns an error for unrecognized URIs.
+    pub(crate) async fn dispatch_read_resource(
+        &self,
+        uri: &str,
+    ) -> Result<ReadResourceResult, ErrorData> {
+        match uri {
+            "nom://weekly-summary" => {
+                #[cfg(test)]
+                let conn = if let Some(ref path) = self.db_path {
+                    Connection::open_at(path).await.map_err(|e| {
+                        ErrorData::new(
+                            ErrorCode::INTERNAL_ERROR,
+                            format!("failed to open db: {e}"),
+                            None,
+                        )
+                    })?
+                } else {
+                    Connection::open().await.map_err(|e| {
+                        ErrorData::new(
+                            ErrorCode::INTERNAL_ERROR,
+                            format!("failed to open db: {e}"),
+                            None,
+                        )
+                    })?
+                };
+
+                #[cfg(not(test))]
+                let conn = Connection::open().await.map_err(|e| {
+                    ErrorData::new(
+                        ErrorCode::INTERNAL_ERROR,
+                        format!("failed to open db: {e}"),
+                        None,
+                    )
+                })?;
+
+                let summary = crate::weekly::fetch_weekly_summary(&conn, &self.clock)
+                    .await
+                    .map_err(|e| {
+                        ErrorData::new(
+                            ErrorCode::INTERNAL_ERROR,
+                            format!("failed to fetch weekly summary: {e}"),
+                            None,
+                        )
+                    })?;
+
+                let json = serde_json::to_string(&summary).map_err(|e| {
+                    ErrorData::new(
+                        ErrorCode::INTERNAL_ERROR,
+                        format!("serialization failed: {e}"),
+                        None,
+                    )
+                })?;
+
+                let contents = ResourceContents::TextResourceContents {
+                    uri: uri.to_string(),
+                    mime_type: Some("application/json".to_string()),
+                    text: json,
+                    meta: None,
+                };
+
+                Ok(ReadResourceResult::new(vec![contents]))
+            }
+            other => Err(ErrorData::new(
+                ErrorCode::INVALID_PARAMS,
+                format!("unknown resource URI: {}", other),
+                None,
+            )),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -142,13 +223,7 @@ impl ServerHandler for McpHandler {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
-        let resources = vec![
-            Resource::new("nom://weekly-summary", "weekly-summary")
-                .with_title("Weekly Summary")
-                .with_description("Rolling 7-day nutrition and weight summary")
-                .with_mime_type("application/json"),
-        ];
-        Ok(ListResourcesResult::with_all_items(resources))
+        Ok(ListResourcesResult::with_all_items(self.build_resources()))
     }
 
     async fn read_resource(
@@ -156,70 +231,7 @@ impl ServerHandler for McpHandler {
         request: rmcp::model::ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, ErrorData> {
-        let uri = &request.uri;
-        match uri.as_str() {
-            "nom://weekly-summary" => {
-                #[cfg(test)]
-                let conn = if let Some(ref path) = self.db_path {
-                    Connection::open_at(path).await.map_err(|e| {
-                        ErrorData::new(
-                            ErrorCode::INTERNAL_ERROR,
-                            format!("failed to open db: {e}"),
-                            None,
-                        )
-                    })?
-                } else {
-                    Connection::open().await.map_err(|e| {
-                        ErrorData::new(
-                            ErrorCode::INTERNAL_ERROR,
-                            format!("failed to open db: {e}"),
-                            None,
-                        )
-                    })?
-                };
-
-                #[cfg(not(test))]
-                let conn = Connection::open().await.map_err(|e| {
-                    ErrorData::new(
-                        ErrorCode::INTERNAL_ERROR,
-                        format!("failed to open db: {e}"),
-                        None,
-                    )
-                })?;
-
-                let summary = crate::weekly::fetch_weekly_summary(&conn, &self.clock)
-                    .await
-                    .map_err(|e| {
-                        ErrorData::new(
-                            ErrorCode::INTERNAL_ERROR,
-                            format!("failed to fetch weekly summary: {e}"),
-                            None,
-                        )
-                    })?;
-
-                let json = serde_json::to_string(&summary).map_err(|e| {
-                    ErrorData::new(
-                        ErrorCode::INTERNAL_ERROR,
-                        format!("serialization failed: {e}"),
-                        None,
-                    )
-                })?;
-
-                let contents = ResourceContents::TextResourceContents {
-                    uri: uri.clone(),
-                    mime_type: Some("application/json".to_string()),
-                    text: json,
-                    meta: None,
-                };
-
-                Ok(ReadResourceResult::new(vec![contents]))
-            }
-            other => Err(ErrorData::new(
-                ErrorCode::INVALID_PARAMS,
-                format!("unknown resource URI: {}", other),
-                None,
-            )),
-        }
+        self.dispatch_read_resource(&request.uri).await
     }
 }
 
@@ -265,6 +277,7 @@ mod tests {
     use super::*;
     use crate::clock::Clock;
     use crate::operation::registry::OperationRegistry;
+    use crate::storage::test::TempDb;
 
     fn make_clock() -> Arc<Clock> {
         Arc::new(Clock { tz: chrono_tz::UTC })
@@ -378,5 +391,47 @@ mod tests {
         // Should have exactly 1 tool (the good one), not 2
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name.as_ref(), "test-op");
+    }
+
+    #[test]
+    fn test_build_resources_lists_weekly_summary() {
+        let clock = Clock { tz: chrono_tz::UTC };
+        let handler = McpHandler::new(OperationRegistry::new(make_clock()), clock);
+        let resources = handler.build_resources();
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].uri, "nom://weekly-summary");
+        assert_eq!(resources[0].title.as_deref(), Some("Weekly Summary"));
+        assert_eq!(resources[0].mime_type.as_deref(), Some("application/json"));
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_dispatch_read_resource_returns_weekly_summary_json() {
+        let db = TempDb::new().await;
+        let clock = Clock { tz: chrono_tz::UTC };
+        let handler = McpHandler::new(OperationRegistry::new(make_clock()), clock)
+            .with_db_path(db.path.clone());
+
+        let result = handler.dispatch_read_resource("nom://weekly-summary").await;
+        assert!(result.is_ok());
+        let ReadResourceResult { contents, .. } = result.unwrap();
+        let ResourceContents::TextResourceContents { text, .. } = &contents[0] else {
+            panic!("expected text contents")
+        };
+        let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert!(value.get("start_date").is_some());
+        assert!(value.get("end_date").is_some());
+        assert!(value.get("nutrients").is_some());
+        assert!(value.get("weight").is_some());
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_dispatch_read_resource_unknown_uri_errors() {
+        let clock = Clock { tz: chrono_tz::UTC };
+        let handler = McpHandler::new(OperationRegistry::new(make_clock()), clock);
+        let result = handler.dispatch_read_resource("nom://bogus").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("unknown resource URI"));
     }
 }
