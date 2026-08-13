@@ -159,6 +159,18 @@ pub fn execute_from_args(args: &[String]) -> Result<serde_json::Value, ErrorData
         .block_on(op.execute_json(op_args))
 }
 
+/// Build the clock and operation registry shared by both serve transports,
+/// so stdio and HTTP serve modes can never diverge in how they're
+/// constructed (TASK-34/TASK-35 AC #4).
+fn build_serve_context(
+    config: &AppConfig,
+) -> Result<(Arc<Clock>, Arc<OperationRegistry>), ErrorData> {
+    let clock = Arc::new(Clock::new(config)?);
+    let (off_client, fdc_client) = build_clients(config)?;
+    let registry = Arc::new(build_registry(clock.clone(), off_client, fdc_client));
+    Ok((clock, registry))
+}
+
 /// Run nom-mcp as a real MCP server over stdio, blocking until the client
 /// disconnects. Logs go to stderr (via `nom_core::logging::init_server`);
 /// stdout is reserved for the MCP JSON-RPC protocol.
@@ -166,9 +178,7 @@ fn run_serve_stdio() -> Result<(), Box<dyn std::error::Error>> {
     let _ = nom_core::logging::init_server();
 
     let config = AppConfig::load()?;
-    let clock = Arc::new(Clock::new(&config)?);
-    let (off_client, fdc_client) = build_clients(&config)?;
-    let registry = Arc::new(build_registry(clock.clone(), off_client, fdc_client));
+    let (clock, registry) = build_serve_context(&config)?;
     let handler = nom_core::operation::mcp_handler::McpHandler::new(registry, *clock);
 
     tokio::runtime::Runtime::new()?.block_on(async {
@@ -214,9 +224,7 @@ fn run_serve_http(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     let _ = nom_core::logging::init_server();
 
     let config = AppConfig::load()?;
-    let clock = Arc::new(Clock::new(&config)?);
-    let (off_client, fdc_client) = build_clients(&config)?;
-    let registry = Arc::new(build_registry(clock.clone(), off_client, fdc_client));
+    let (clock, registry) = build_serve_context(&config)?;
     let handler = nom_core::operation::mcp_handler::McpHandler::new(registry.clone(), *clock);
     let bind_address = config.http_bind_address.clone();
 
