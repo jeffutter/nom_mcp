@@ -1,9 +1,11 @@
 ---
 id: TASK-13
 title: 'Fix: add regression test for update_meal empty-portions clear-all behavior'
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@ralph'
 created_date: '2026-08-12 20:21'
+updated_date: '2026-08-13 01:02'
 labels:
   - review-followup
 dependencies:
@@ -20,9 +22,9 @@ Found while reviewing TASK-2.14 (nom-core/src/meal/mod.rs, UpdateMeal::execute_j
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A new integration test in nom-core/src/meal/mod.rs calls update_meal with portions: [] on a meal that has existing portions
-- [ ] #2 The test asserts the meal's portions are actually deleted (e.g. a follow-up query or the returned summary shows zero portions) and that materialized totals are recomputed to reflect the empty portion set (adjustment-only totals, or zero if no adjustment)
-- [ ] #3 nix develop -c cargo test -p nom-core passes
+- [x] #1 A new integration test in nom-core/src/meal/mod.rs calls update_meal with portions: [] on a meal that has existing portions
+- [x] #2 The test asserts the meal's portions are actually deleted (e.g. a follow-up query or the returned summary shows zero portions) and that materialized totals are recomputed to reflect the empty portion set (adjustment-only totals, or zero if no adjustment)
+- [x] #3 nix develop -c cargo test -p nom-core passes
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -36,3 +38,9 @@ SETUP (read first): This is a Rust+WebAssembly core (crates/gql-core) with a Typ
 4. Also assert the meal's materialized totals reflect zero portions after the clear (i.e. total_calories etc. equal whatever the adjustment alone contributes, or 0.0 if no adjustment was set) -- this is the part that would silently break if totals recomputation were skipped when portions is empty.
 5. Run: nix develop -c cargo test -p nom-core -- meal::tests::test_update_meal_empty_portions_clears_all --nocapture and confirm it passes, then run the full suite: nix develop -c cargo test -p nom-core
 <!-- SECTION:PLAN:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added regression test test_update_meal_empty_portions_clears_all in nom-core/src/meal/mod.rs. The test logs a meal with 2 portions (750 cal total), then calls update_meal with portions: [] and verifies: (1) returned portions array is empty, (2) materialized totals are all zeros, (3) DB-level portion count for that meal_id is 0. All 164 nom-core tests pass.
+<!-- SECTION:FINAL_SUMMARY:END -->
