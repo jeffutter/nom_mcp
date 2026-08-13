@@ -313,7 +313,9 @@ impl ServerHandler for McpHandler {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(self.build_tools_gated().await))
+        Ok(ListToolsResult::with_all_items(
+            self.build_tools_gated().await,
+        ))
     }
 
     async fn call_tool(
@@ -676,7 +678,10 @@ mod tests {
             .await;
         assert!(result.is_ok());
         let ReadResourceResult { contents, .. } = result.unwrap();
-        let ResourceContents::TextResourceContents { mime_type, text, .. } = &contents[0] else {
+        let ResourceContents::TextResourceContents {
+            mime_type, text, ..
+        } = &contents[0]
+        else {
             panic!("expected text contents")
         };
         assert_eq!(mime_type.as_deref(), Some("text/html;profile=mcp-app"));

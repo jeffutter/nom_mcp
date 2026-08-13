@@ -493,11 +493,8 @@ impl SearchFood {
                                 // The batch endpoint doesn't guarantee it echoes
                                 // results back in request order — restore USDA's
                                 // relevance ranking before candidates are built.
-                                let rank: std::collections::HashMap<i64, usize> = ids
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(i, &id)| (id, i))
-                                    .collect();
+                                let rank: std::collections::HashMap<i64, usize> =
+                                    ids.iter().enumerate().map(|(i, &id)| (id, i)).collect();
                                 foods.sort_by_key(|f| {
                                     rank.get(&f.fdc_id).copied().unwrap_or(usize::MAX)
                                 });

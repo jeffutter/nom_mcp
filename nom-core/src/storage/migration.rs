@@ -12,9 +12,15 @@ const MIGRATION_V1: &str = include_str!("schema.sql");
 /// but we compute it at runtime here to avoid another dependency for now).
 fn hash_v1() -> String {
     use sha2::{Digest, Sha256};
+    use std::fmt::Write;
     let mut hasher = Sha256::new();
     hasher.update(MIGRATION_V1);
-    format!("{:x}", hasher.finalize())
+    let result = hasher.finalize();
+    let mut s = String::with_capacity(result.len() * 2);
+    for &byte in &result {
+        write!(s, "{byte:02x}").unwrap();
+    }
+    s
 }
 
 /// Run pending migrations against the connection.
