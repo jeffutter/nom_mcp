@@ -3,11 +3,11 @@ id: TASK-27
 title: >-
   Fix: weight module list operations silently drop rows on storage error via
   redundant N+1 queries
-status: In Progress
+status: Done
 assignee:
   - '@ralph'
 created_date: '2026-08-13 02:07'
-updated_date: '2026-08-13 02:16'
+updated_date: '2026-08-13 02:23'
 labels:
   - review-followup
   - planned
@@ -25,13 +25,13 @@ Found while reviewing TASK-2.15 (nom-core/src/weight/mod.rs). GetWeightToday (:5
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 GetWeightToday's query selects id, logged_at, logged_date, and value directly in the single 'SELECT ... WHERE logged_date = ? ORDER BY logged_at DESC' and maps each row straight to a WeightEntrySummary — no per-row call to build_weight_summary
-- [ ] #2 GetWeightByDate and GetWeightByDateRange are changed identically
-- [ ] #3 build_weight_summary is retained only for its remaining callers (LogWeight and UpdateWeightEntry, which each need a single-row fetch after a write) — remove it if those are also inlined, but do not leave it as unused dead code either way
-- [ ] #4 No error from row iteration is silently discarded — a row-read failure inside the loop propagates as ErrorData::storage_failure via the '?' operator, consistent with how the rest of each function already handles row errors
-- [ ] #5 A regression test proves list results are complete even after a hypothetical row-level fetch would have previously failed (or, at minimum, a test proves the list operations return all seeded rows with correct field values, guarding against a future silent-drop regression)
-- [ ] #6 nix develop -c cargo test -p nom-core passes
-- [ ] #7 nix develop -c cargo clippy --workspace --all-targets is clean
+- [x] #1 GetWeightToday's query selects id, logged_at, logged_date, and value directly in the single 'SELECT ... WHERE logged_date = ? ORDER BY logged_at DESC' and maps each row straight to a WeightEntrySummary — no per-row call to build_weight_summary
+- [x] #2 GetWeightByDate and GetWeightByDateRange are changed identically
+- [x] #3 build_weight_summary is retained only for its remaining callers (LogWeight and UpdateWeightEntry, which each need a single-row fetch after a write) — remove it if those are also inlined, but do not leave it as unused dead code either way
+- [x] #4 No error from row iteration is silently discarded — a row-read failure inside the loop propagates as ErrorData::storage_failure via the '?' operator, consistent with how the rest of each function already handles row errors
+- [x] #5 A regression test proves list results are complete even after a hypothetical row-level fetch would have previously failed (or, at minimum, a test proves the list operations return all seeded rows with correct field values, guarding against a future silent-drop regression)
+- [x] #6 nix develop -c cargo test -p nom-core passes
+- [x] #7 nix develop -c cargo clippy --workspace --all-targets is clean
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -80,3 +80,9 @@ build_weight_summary is retained for its remaining caller (UpdateWeightEntry pos
 ### Why No Sub-Tickets
 All changes are in a single file, tightly coupled (same pattern applied to 3 functions), and total diff is under 60 lines. Splitting into sub-tickets would create coordination overhead without meaningful independent shippability.
 <!-- SECTION:PLAN:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Eliminated N+1 query pattern in GetWeightToday, GetWeightByDate, and GetWeightByDateRange by selecting all four columns (id, logged_at, logged_date, value) directly instead of fetching IDs then re-fetching per row via build_weight_summary. This fixes silent row drops on storage errors (errors now propagate via ? operator) and removes unnecessary round-trips. Added regression test that seeds 3 entries and verifies all are returned. build_weight_summary retained for UpdateWeightEntry's post-update fetch.
+<!-- SECTION:FINAL_SUMMARY:END -->

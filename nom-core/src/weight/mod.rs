@@ -539,7 +539,7 @@ impl Operation for GetWeightToday {
 
         let today_str = Clock::format_date(self.clock.today());
 
-        let sql = "SELECT id FROM weight_entries WHERE logged_date = ? ORDER BY logged_at DESC";
+        let sql = "SELECT id, logged_at, logged_date, value FROM weight_entries WHERE logged_date = ? ORDER BY logged_at DESC";
         let mut stmt = conn
             .prepare(sql)
             .await
@@ -555,12 +555,12 @@ impl Operation for GetWeightToday {
             .await
             .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
         {
-            let id: i64 = row
-                .get(0)
-                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-            if let Ok(summary) = build_weight_summary(&conn, id).await {
-                summaries.push(summary);
-            }
+            summaries.push(WeightEntrySummary {
+                id: row.get::<i64>(0).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+                logged_at: row.get::<String>(1).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+                logged_date: row.get::<String>(2).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+                value: row.get::<f64>(3).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+            });
         }
 
         Ok(serde_json::to_value(summaries)
@@ -635,7 +635,7 @@ impl Operation for GetWeightByDate {
         #[cfg(not(test))]
         let conn = Connection::open().await?;
 
-        let sql = "SELECT id FROM weight_entries WHERE logged_date = ? ORDER BY logged_at DESC";
+        let sql = "SELECT id, logged_at, logged_date, value FROM weight_entries WHERE logged_date = ? ORDER BY logged_at DESC";
         let mut stmt = conn
             .prepare(sql)
             .await
@@ -651,12 +651,12 @@ impl Operation for GetWeightByDate {
             .await
             .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
         {
-            let id: i64 = row
-                .get(0)
-                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-            if let Ok(summary) = build_weight_summary(&conn, id).await {
-                summaries.push(summary);
-            }
+            summaries.push(WeightEntrySummary {
+                id: row.get::<i64>(0).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+                logged_at: row.get::<String>(1).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+                logged_date: row.get::<String>(2).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+                value: row.get::<f64>(3).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+            });
         }
 
         Ok(serde_json::to_value(summaries)
@@ -734,7 +734,7 @@ impl Operation for GetWeightByDateRange {
         let conn = Connection::open().await?;
 
         let sql = r#"
-            SELECT id FROM weight_entries
+            SELECT id, logged_at, logged_date, value FROM weight_entries
             WHERE logged_date >= ? AND logged_date <= ?
             ORDER BY logged_at DESC
         "#;
@@ -753,15 +753,71 @@ impl Operation for GetWeightByDateRange {
             .await
             .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
         {
-            let id: i64 = row
-                .get(0)
-                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
-            if let Ok(summary) = build_weight_summary(&conn, id).await {
-                summaries.push(summary);
-            }
+            summaries.push(WeightEntrySummary {
+                id: row.get::<i64>(0).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+                logged_at: row.get::<String>(1).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+                logged_date: row.get::<String>(2).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+                value: row.get::<f64>(3).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+            });
         }
 
         Ok(serde_json::to_value(summaries)
             .map_err(|e| ErrorData::storage_failure(format!("serialization failed: {e}")))?)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::test::TempDb;
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_weight_by_date_returns_all_entries() {
+        // Regression test: seed 3 weight entries for the same date and verify
+        // GetWeightByDate returns all three, guarding against silent row drops.
+        let db = TempDb::new().await;
+        let conn = Connection::open_at(&db.path).await.unwrap();
+
+        let test_date = "2025-01-15";
+        conn.execute(
+            "INSERT INTO weight_entries (logged_at, logged_date, value) VALUES (?, ?, ?)",
+            ("2025-01-15T08:00:00Z", test_date, 180.5),
+        ).await.unwrap();
+        conn.execute(
+            "INSERT INTO weight_entries (logged_at, logged_date, value) VALUES (?, ?, ?)",
+            ("2025-01-15T12:00:00Z", test_date, 179.0),
+        ).await.unwrap();
+        conn.execute(
+            "INSERT INTO weight_entries (logged_at, logged_date, value) VALUES (?, ?, ?)",
+            ("2025-01-15T18:00:00Z", test_date, 178.5),
+        ).await.unwrap();
+        drop(conn);
+
+        let op = GetWeightByDate::new().with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({ "date": test_date })))
+            .await
+            .unwrap();
+
+        let entries = result.as_array().expect("should return an array");
+        assert_eq!(entries.len(), 3, "all seeded entries must be returned");
+
+        // Verify ordered by logged_at DESC (latest first)
+        assert_eq!(entries[0]["value"].as_f64().unwrap(), 178.5);
+        assert_eq!(entries[1]["value"].as_f64().unwrap(), 179.0);
+        assert_eq!(entries[2]["value"].as_f64().unwrap(), 180.5);
+
+        // Verify all fields present on each entry
+        for entry in entries {
+            assert!(entry["id"].is_i64());
+            assert!(entry["logged_at"].is_string());
+            assert!(entry["logged_date"].is_string());
+            assert!(entry["value"].is_number());
+        }
     }
 }
