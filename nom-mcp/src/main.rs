@@ -13,6 +13,10 @@ use nom_core::error::{ErrorData, cli_exit};
 use nom_core::food::{CreateCustomFood, SearchFood};
 use nom_core::meal::{DeleteMeal, GetMealsByDateRange, LogMeal, SearchMeals, UpdateMeal};
 use nom_core::operation::OperationRegistry;
+use nom_core::weight::{
+    DeleteWeightEntry, GetWeightByDate, GetWeightByDateRange, GetWeightToday, LogWeight,
+    UpdateWeightEntry,
+};
 
 fn main() {
     // Initialize tracing for CLI mode (best-effort; failure doesn't crash)
@@ -61,6 +65,14 @@ pub fn execute_from_args(args: &[String]) -> Result<serde_json::Value, ErrorData
     registry.register(Arc::new(DeleteMeal::new()));
     registry.register(Arc::new(SearchMeals::new()));
     registry.register(Arc::new(GetMealsByDateRange::new()));
+
+    // Register weight operations
+    registry.register(Arc::new(LogWeight::new(*clock)));
+    registry.register(Arc::new(UpdateWeightEntry::new(*clock)));
+    registry.register(Arc::new(DeleteWeightEntry::new()));
+    registry.register(Arc::new(GetWeightToday::new(*clock)));
+    registry.register(Arc::new(GetWeightByDate::new()));
+    registry.register(Arc::new(GetWeightByDateRange::new()));
 
     // Dispatch based on CLI subcommand
     if args.len() < 2 {
