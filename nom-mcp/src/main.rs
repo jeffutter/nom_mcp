@@ -10,6 +10,7 @@ use nom_core::clock::Clock;
 use nom_core::config::AppConfig;
 use nom_core::error::{ErrorData, cli_exit};
 use nom_core::food::{CreateCustomFood, SearchFood};
+use nom_core::goal::{GetGoalProgress, SetNutritionGoals};
 use nom_core::meal::{DeleteMeal, GetMealsByDateRange, LogMeal, SearchMeals, UpdateMeal};
 use nom_core::operation::{OperationRegistry, cli_router};
 use nom_core::weight::{
@@ -64,6 +65,10 @@ pub fn execute_from_args(args: &[String]) -> Result<serde_json::Value, ErrorData
     registry.register(Arc::new(DeleteMeal::new()));
     registry.register(Arc::new(SearchMeals::new()));
     registry.register(Arc::new(GetMealsByDateRange::new()));
+
+    // Register goal operations
+    registry.register(Arc::new(SetNutritionGoals::new(*clock)));
+    registry.register(Arc::new(GetGoalProgress::new(*clock)));
 
     // Register weight operations
     registry.register(Arc::new(LogWeight::new(*clock)));

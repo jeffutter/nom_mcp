@@ -23,6 +23,7 @@ pub mod clock;
 pub mod config;
 pub mod error;
 pub mod food;
+pub mod goal;
 pub mod logging;
 pub mod meal;
 pub mod operation;
