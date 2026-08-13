@@ -7,7 +7,7 @@ status: Done
 assignee:
   - '@ralph'
 created_date: '2026-08-13 02:07'
-updated_date: '2026-08-13 05:20'
+updated_date: '2026-08-13 05:25'
 labels:
   - review-followup
 dependencies:
@@ -48,3 +48,9 @@ SETUP (read first): This is a Rust workspace (nom-core, nom-mcp, nom-mcp-http; n
 6. Run: nix develop -c cargo clippy --workspace --all-targets
 7. Run: nix develop -c cargo fmt --check (both crates)
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Fixup applied post-review (2nd review round): the Drop impl's 'if let Some(saved)' only handled the case where XDG_CONFIG_HOME had a prior value; when there was no prior value (the common case per this ticket's own bug report — most CI environments), the branch did nothing AND the cleared_vars loop was told to skip XDG_CONFIG_HOME unconditionally, so the guard's own set() value leaked past drop() instead of being removed. Fixed by replacing the if-let with an exhaustive match: Some(non-empty) restores, everything else (None or empty) removes. Applied identically to nom-mcp/src/bin/nom-mcp-remote.rs's sibling copy. Added test_guard_leaves_xdg_config_home_unset_when_no_prior_value to nom-core/src/config.rs proving the fix. nix develop -c cargo test -p nom-core -p nom-mcp passes (185+7), clippy clean, fmt clean.
+<!-- SECTION:NOTES:END -->

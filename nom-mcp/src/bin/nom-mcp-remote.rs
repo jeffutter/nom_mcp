@@ -127,12 +127,12 @@ mod tests {
 
     impl Drop for TestGuard {
         fn drop(&mut self) {
-            if let Some(saved) = &self.saved_xdg {
-                if saved.is_empty() {
-                    unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
-                } else {
+            // Keep in sync with the identical match in nom-core/src/config.rs.
+            match &self.saved_xdg {
+                Some(saved) if !saved.is_empty() => {
                     unsafe { std::env::set_var("XDG_CONFIG_HOME", saved) };
                 }
+                _ => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
             }
             // Remove any test-specific env vars.
             // Skip XDG_CONFIG_HOME — the block above already restored it.

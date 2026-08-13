@@ -324,13 +324,16 @@ mod tests {
 
     impl Drop for TestGuard {
         fn drop(&mut self) {
-            // Restore XDG_CONFIG_HOME
-            if let Some(saved) = &self.saved_xdg {
-                if saved.is_empty() {
-                    unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
-                } else {
+            // Restore XDG_CONFIG_HOME to its pre-guard state. Both the
+            // no-prior-value and empty-string cases must remove the var
+            // explicitly — leaving this as `if let Some` only skipped the
+            // removal, silently leaking whatever `set()` last wrote when
+            // there was no prior value to restore.
+            match &self.saved_xdg {
+                Some(saved) if !saved.is_empty() => {
                     unsafe { std::env::set_var("XDG_CONFIG_HOME", saved) };
                 }
+                _ => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
             }
             // Remove any test-specific env vars.
             // Skip XDG_CONFIG_HOME — the block above already restored (or
@@ -452,6 +455,24 @@ timezone = "America/Los_Angeles"
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");
         }
+    }
+
+    #[serial_test::serial]
+    #[test]
+    fn test_guard_leaves_xdg_config_home_unset_when_no_prior_value() {
+        // The common case (per TASK-29's own bug report: most CI environments):
+        // XDG_CONFIG_HOME is unset before the guard runs. Verify the guard's
+        // own set() value doesn't leak past drop().
+        unsafe {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+        let mut guard = TestGuard::new();
+        guard.set("XDG_CONFIG_HOME", "/tmp/nom_mcp_test_scratch_no_prior");
+        drop(guard);
+        assert!(
+            std::env::var("XDG_CONFIG_HOME").is_err(),
+            "XDG_CONFIG_HOME should be unset after drop when there was no prior value"
+        );
     }
 
     #[serial_test::serial]
