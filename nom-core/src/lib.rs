@@ -28,4 +28,6 @@ pub mod logging;
 pub mod meal;
 pub mod operation;
 pub mod storage;
+pub mod weekly;
 pub mod weight;
+pub mod widget;

@@ -11,27 +11,43 @@ use rmcp::{
     ErrorData, RoleServer,
     handler::server::ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, ContentBlock, ErrorCode, ListToolsResult,
-        PaginatedRequestParams, Tool,
+        CallToolRequestParams, CallToolResult, ContentBlock, ErrorCode, Implementation,
+        InitializeResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
+        ReadResourceResult, Resource, ResourceContents, ServerCapabilities, Tool,
     },
     service::RequestContext,
 };
 
 use super::{Operation, OperationRegistry, Surfaces};
+use crate::clock::Clock;
+use crate::storage::Connection;
 
 /// An MCP server handler backed by an OperationRegistry.
 ///
 /// Implements `list_tools` and `call_tool` by iterating the registry directly,
 /// deliberately bypassing rmcp's `#[tool]` macro/ToolRouter.
+/// Also implements resource support for `nom://weekly-summary`.
 pub struct McpHandler {
     registry: Arc<OperationRegistry>,
+    clock: Clock,
+    #[cfg(test)]
+    db_path: Option<std::path::PathBuf>,
 }
 
 impl McpHandler {
-    pub fn new(registry: OperationRegistry) -> Self {
+    pub fn new(registry: OperationRegistry, clock: Clock) -> Self {
         Self {
             registry: Arc::new(registry),
+            clock,
+            #[cfg(test)]
+            db_path: None,
         }
+    }
+
+    #[cfg(test)]
+    pub fn with_db_path(mut self, path: std::path::PathBuf) -> Self {
+        self.db_path = Some(path);
+        self
     }
 
     /// Build the list of tools from the registry, filtering by MCP surface
@@ -56,11 +72,22 @@ impl McpHandler {
 }
 
 // ---------------------------------------------------------------------------
-// ServerHandler implementation — only override tool-related methods;
+// ServerHandler implementation — override tool/resource/info methods;
 // everything else uses the default (no-op / not-found) implementations.
 // ---------------------------------------------------------------------------
 
 impl ServerHandler for McpHandler {
+    // -- Info --
+
+    fn get_info(&self) -> InitializeResult {
+        let capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_resources()
+            .build();
+        InitializeResult::new(capabilities)
+            .with_server_info(Implementation::new("nom-mcp", env!("CARGO_PKG_VERSION")))
+    }
+
     // -- Tools --
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
@@ -105,6 +132,93 @@ impl ServerHandler for McpHandler {
                 let message = format!("{}", error_data);
                 Ok(CallToolResult::error(vec![ContentBlock::text(message)]))
             }
+        }
+    }
+
+    // -- Resources --
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        let resources = vec![
+            Resource::new("nom://weekly-summary", "weekly-summary")
+                .with_title("Weekly Summary")
+                .with_description("Rolling 7-day nutrition and weight summary")
+                .with_mime_type("application/json"),
+        ];
+        Ok(ListResourcesResult::with_all_items(resources))
+    }
+
+    async fn read_resource(
+        &self,
+        request: rmcp::model::ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResult, ErrorData> {
+        let uri = &request.uri;
+        match uri.as_str() {
+            "nom://weekly-summary" => {
+                #[cfg(test)]
+                let conn = if let Some(ref path) = self.db_path {
+                    Connection::open_at(path).await.map_err(|e| {
+                        ErrorData::new(
+                            ErrorCode::INTERNAL_ERROR,
+                            format!("failed to open db: {e}"),
+                            None,
+                        )
+                    })?
+                } else {
+                    Connection::open().await.map_err(|e| {
+                        ErrorData::new(
+                            ErrorCode::INTERNAL_ERROR,
+                            format!("failed to open db: {e}"),
+                            None,
+                        )
+                    })?
+                };
+
+                #[cfg(not(test))]
+                let conn = Connection::open().await.map_err(|e| {
+                    ErrorData::new(
+                        ErrorCode::INTERNAL_ERROR,
+                        format!("failed to open db: {e}"),
+                        None,
+                    )
+                })?;
+
+                let summary = crate::weekly::fetch_weekly_summary(&conn, &self.clock)
+                    .await
+                    .map_err(|e| {
+                        ErrorData::new(
+                            ErrorCode::INTERNAL_ERROR,
+                            format!("failed to fetch weekly summary: {e}"),
+                            None,
+                        )
+                    })?;
+
+                let json = serde_json::to_string(&summary).map_err(|e| {
+                    ErrorData::new(
+                        ErrorCode::INTERNAL_ERROR,
+                        format!("serialization failed: {e}"),
+                        None,
+                    )
+                })?;
+
+                let contents = ResourceContents::TextResourceContents {
+                    uri: uri.clone(),
+                    mime_type: Some("application/json".to_string()),
+                    text: json,
+                    meta: None,
+                };
+
+                Ok(ReadResourceResult::new(vec![contents]))
+            }
+            other => Err(ErrorData::new(
+                ErrorCode::INVALID_PARAMS,
+                format!("unknown resource URI: {}", other),
+                None,
+            )),
         }
     }
 }
@@ -207,7 +321,8 @@ mod tests {
     fn test_mcp_handler_new() {
         let mut reg = OperationRegistry::new(make_clock());
         reg.register(Arc::new(TestOp));
-        let handler = McpHandler::new(reg);
+        let clock = Clock { tz: chrono_tz::UTC };
+        let handler = McpHandler::new(reg, clock);
         assert_eq!(
             handler.get_tool("test-op").map(|t| t.name.to_string()),
             Some("test-op".to_string())
@@ -224,7 +339,8 @@ mod tests {
 
     #[test]
     fn test_empty_registry_list_tools() {
-        let handler = McpHandler::new(OperationRegistry::new(make_clock()));
+        let clock = Clock { tz: chrono_tz::UTC };
+        let handler = McpHandler::new(OperationRegistry::new(make_clock()), clock);
         let tools = handler.build_tools();
         assert!(tools.is_empty(), "empty registry should produce no tools");
     }
@@ -241,19 +357,21 @@ mod tests {
 
     #[test]
     fn test_get_tool_skips_bad_schema() {
+        let clock = Clock { tz: chrono_tz::UTC };
         let mut reg = OperationRegistry::new(make_clock());
         reg.register(Arc::new(BadSchemaOp));
-        let handler = McpHandler::new(reg);
+        let handler = McpHandler::new(reg, clock);
         // get_tool should return None for operations with bad schemas (no panic)
         assert!(handler.get_tool("bad-schema-op").is_none());
     }
 
     #[test]
     fn test_list_tools_omits_bad_schema_but_keeps_good_ops() {
+        let clock = Clock { tz: chrono_tz::UTC };
         let mut reg = OperationRegistry::new(make_clock());
         reg.register(Arc::new(TestOp));
         reg.register(Arc::new(BadSchemaOp));
-        let handler = McpHandler::new(reg);
+        let handler = McpHandler::new(reg, clock);
 
         let tools = handler.build_tools();
 

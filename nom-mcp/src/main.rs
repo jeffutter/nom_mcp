@@ -17,6 +17,7 @@ use nom_core::weight::{
     DeleteWeightEntry, GetWeightByDate, GetWeightByDateRange, GetWeightToday, LogWeight,
     UpdateWeightEntry,
 };
+use nom_core::widget::{GetWidgetDisplay, SetWidgetDisplay};
 
 fn main() {
     // Initialize tracing for CLI mode (best-effort; failure doesn't crash)
@@ -77,6 +78,10 @@ pub fn execute_from_args(args: &[String]) -> Result<serde_json::Value, ErrorData
     registry.register(Arc::new(GetWeightToday::new(*clock)));
     registry.register(Arc::new(GetWeightByDate::new()));
     registry.register(Arc::new(GetWeightByDateRange::new()));
+
+    // Register widget display operations (MCP-only)
+    registry.register(Arc::new(GetWidgetDisplay::new()));
+    registry.register(Arc::new(SetWidgetDisplay::new()));
 
     // Dispatch based on CLI subcommand (clap-backed: `--help`/`-h` print usage and exit)
     let (op, op_args) = cli_router::parse_and_dispatch(&registry, args)?;

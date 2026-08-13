@@ -35,7 +35,7 @@ pub enum Direction {
 /// Status of consumed vs target.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-enum ProgressStatus {
+pub enum ProgressStatus {
     Under,
     Met,
     Over,
@@ -43,18 +43,18 @@ enum ProgressStatus {
 
 /// Per-nutrient progress comparison.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
-struct NutrientProgress {
-    consumed: f64,
+pub struct NutrientProgress {
+    pub consumed: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    target: Option<f64>,
+    pub target: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    remaining: Option<f64>,
+    pub remaining: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    percent: Option<f64>,
+    pub percent: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "direction")]
-    direction: Option<Direction>,
+    pub direction: Option<Direction>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    status: Option<ProgressStatus>,
+    pub status: Option<ProgressStatus>,
 }
 
 /// Goal progress output shape per doc-5 §7.
