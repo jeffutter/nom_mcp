@@ -43,13 +43,17 @@ jobs:
           profile: minimal
           override: true
       - uses: Swatinem/rust-cache@v2
-      - name: Cargo build
-        uses: actions-rs/cargo@v1
+      - name: Install cross
+        if: matrix.job.use-cross
+        uses: taiki-e/install-action@v2
         with:
-          command: build
-          use-cross: ${{ matrix.job.use-cross }}
-          toolchain: ${{ matrix.rust }}
-          args: --release --target ${{ matrix.job.target }} --bins
+          tool: cross
+      - name: Cargo build (native)
+        if: ${{ !matrix.job.use-cross }}
+        run: cargo build --release --target ${{ matrix.job.target }} --bins
+      - name: Cargo build (cross)
+        if: matrix.job.use-cross
+        run: cross build --release --target ${{ matrix.job.target }} --bins
 
       - name: install strip command
         shell: bash
