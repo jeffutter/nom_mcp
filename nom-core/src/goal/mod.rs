@@ -673,9 +673,20 @@ impl Operation for GetGoalProgress {
         #[cfg(not(test))]
         let conn = Connection::open().await?;
 
-        // Resolve query date
+        // Resolve query date. Reject anything that isn't a strict ISO
+        // YYYY-MM-DD date: this value is echoed back verbatim in the response
+        // and interpolated into the goal-progress widget's HTML, so malformed
+        // input must never reach that far.
         let query_date = match &req.date {
-            Some(d) => d.clone(),
+            Some(d) => {
+                d.parse::<chrono::NaiveDate>().map_err(|_| {
+                    ErrorData::validation(
+                        "date",
+                        format!("date must be in YYYY-MM-DD format, got: {d}"),
+                    )
+                })?;
+                d.clone()
+            }
             None => Clock::format_date(self.clock.today()),
         };
 
@@ -1354,5 +1365,40 @@ mod tests {
             .unwrap();
 
         assert_eq!(result["date"].as_str().unwrap(), today_str);
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_goal_progress_rejects_malformed_date() {
+        let db = TempDb::new().await;
+        let clock = clock();
+        let op = GetGoalProgress::new(clock).with_db_path(db.path.clone());
+
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "date": "<img src=x onerror=alert(1)>"
+            })))
+            .await;
+
+        let err = result.unwrap_err();
+        assert_eq!(err.category, ErrorCategory::Validation);
+        assert_eq!(err.field.as_deref(), Some("date"));
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_goal_progress_accepts_well_formed_date() {
+        let db = TempDb::new().await;
+        let clock = clock();
+        let op = GetGoalProgress::new(clock).with_db_path(db.path.clone());
+
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "date": "2025-01-15"
+            })))
+            .await
+            .unwrap();
+
+        assert_eq!(result["date"].as_str().unwrap(), "2025-01-15");
     }
 }

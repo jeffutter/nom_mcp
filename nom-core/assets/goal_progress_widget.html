@@ -204,6 +204,15 @@
     return Math.round(n * 10) / 10;
   }
 
+  // Escapes a value for safe interpolation into innerHTML. Server-side
+  // validation constrains fields like `date`, but the widget must not rely
+  // on that alone since it cannot verify who produced the tool result it renders.
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
   function nutrientRowHtml(label, unit, p) {
     p = p || {};
     var consumed = fmt(p.consumed);
@@ -247,7 +256,7 @@
 
   function render(data) {
     var html = "<h1>Goal Progress</h1>";
-    html += '<p class="subtitle">' + (data.date || "") + "</p>";
+    html += '<p class="subtitle">' + escapeHtml(data.date || "") + "</p>";
     NUTRIENTS.forEach(function (n) {
       html += nutrientRowHtml(n.label, n.unit, data[n.key]);
     });
@@ -258,7 +267,7 @@
   }
 
   function renderError(message) {
-    appEl.innerHTML = '<p class="placeholder">' + message + "</p>";
+    appEl.innerHTML = '<p class="placeholder">' + escapeHtml(message) + "</p>";
   }
 
   function extractGoalProgress(toolResult) {
