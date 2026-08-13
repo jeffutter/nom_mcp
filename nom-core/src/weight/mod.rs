@@ -776,35 +776,346 @@ impl Operation for GetWeightByDateRange {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ErrorCategory;
     use crate::storage::test::TempDb;
+
+    fn clock() -> Clock {
+        Clock { tz: chrono_tz::UTC }
+    }
+
+    // ---- LogWeight tests (AC #2) ----
 
     #[serial_test::serial]
     #[tokio::test]
-    async fn test_get_weight_by_date_returns_all_entries() {
-        // Regression test: seed 3 weight entries for the same date and verify
-        // GetWeightByDate returns all three, guarding against silent row drops.
+    async fn test_log_weight_default_timestamp() {
+        let db = TempDb::new().await;
+        let clock = clock();
+        let op = LogWeight::new(clock).with_db_path(db.path.clone());
+
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({ "value": 75.0 })))
+            .await
+            .unwrap();
+
+        assert!(result["entry_id"].is_i64());
+        assert!(result["logged_at"].is_string());
+        assert!(result["logged_date"].is_string());
+        assert_eq!(result["value"].as_f64().unwrap(), 75.0);
+
+        // Verify logged_date matches today's date in UTC
+        let today_str = Clock::format_date(clock.today());
+        assert_eq!(result["logged_date"].as_str().unwrap(), today_str);
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_log_weight_explicit_logged_at() {
+        let db = TempDb::new().await;
+        let clock = clock();
+        let op = LogWeight::new(clock).with_db_path(db.path.clone());
+
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "value": 75.0,
+                "logged_at": "2025-01-15T10:30:00Z"
+            })))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result["logged_at"].as_str().unwrap(),
+            "2025-01-15T10:30:00Z"
+        );
+        assert_eq!(result["logged_date"].as_str().unwrap(), "2025-01-15");
+        assert_eq!(result["value"].as_f64().unwrap(), 75.0);
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_log_weight_rejects_non_positive_value() {
+        let db = TempDb::new().await;
+        let clock = clock();
+
+        // Test zero value
+        let op = LogWeight::new(clock).with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({ "value": 0.0 })))
+            .await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().category, ErrorCategory::Validation);
+
+        // Test negative value
+        let op = LogWeight::new(clock).with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({ "value": -5.0 })))
+            .await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().category, ErrorCategory::Validation);
+    }
+
+    // ---- UpdateWeightEntry tests (AC #3) ----
+
+    async fn seed_entry(conn: &Connection, logged_at: &str, logged_date: &str, value: f64) -> i64 {
+        let sql = "INSERT INTO weight_entries (logged_at, logged_date, value) VALUES (?, ?, ?) RETURNING id";
+        let mut stmt = conn.prepare(sql).await.unwrap();
+        let mut rows = stmt.query((logged_at, logged_date, value)).await.unwrap();
+        match rows.next().await.unwrap() {
+            Some(row) => match row.get_value(0).unwrap() {
+                turso::Value::Integer(id) => id,
+                _ => panic!("unexpected type"),
+            },
+            None => panic!("no row"),
+        }
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_update_weight_entry_value_only() {
         let db = TempDb::new().await;
         let conn = Connection::open_at(&db.path).await.unwrap();
+        let entry_id = seed_entry(&conn, "2025-01-15T08:00:00Z", "2025-01-15", 75.0).await;
+        drop(conn);
 
+        let clock = clock();
+        let op = UpdateWeightEntry::new(clock).with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "entry_id": entry_id,
+                "value": 80.0
+            })))
+            .await
+            .unwrap();
+
+        assert_eq!(result["value"].as_f64().unwrap(), 80.0);
+        assert_eq!(
+            result["logged_at"].as_str().unwrap(),
+            "2025-01-15T08:00:00Z"
+        );
+
+        // Verify persistence via GetWeightByDate
+        let get_op = GetWeightByDate::new().with_db_path(db.path.clone());
+        let query_result = get_op
+            .execute_json(Arc::new(serde_json::json!({ "date": "2025-01-15" })))
+            .await
+            .unwrap();
+        let entries = query_result.as_array().unwrap();
+        assert_eq!(entries[0]["value"].as_f64().unwrap(), 80.0);
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_update_weight_entry_logged_at_only() {
+        let db = TempDb::new().await;
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        let entry_id = seed_entry(&conn, "2025-01-15T08:00:00Z", "2025-01-15", 75.0).await;
+        drop(conn);
+
+        let clock = clock();
+        let op = UpdateWeightEntry::new(clock).with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "entry_id": entry_id,
+                "logged_at": "2025-06-01T09:00:00Z"
+            })))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result["logged_at"].as_str().unwrap(),
+            "2025-06-01T09:00:00Z"
+        );
+        assert_eq!(result["logged_date"].as_str().unwrap(), "2025-06-01");
+        assert_eq!(result["value"].as_f64().unwrap(), 75.0);
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_update_weight_entry_both_fields() {
+        let db = TempDb::new().await;
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        let entry_id = seed_entry(&conn, "2025-01-15T08:00:00Z", "2025-01-15", 75.0).await;
+        drop(conn);
+
+        let clock = clock();
+        let op = UpdateWeightEntry::new(clock).with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "entry_id": entry_id,
+                "value": 80.0,
+                "logged_at": "2025-06-01T09:00:00Z"
+            })))
+            .await
+            .unwrap();
+
+        assert_eq!(result["value"].as_f64().unwrap(), 80.0);
+        assert_eq!(
+            result["logged_at"].as_str().unwrap(),
+            "2025-06-01T09:00:00Z"
+        );
+        assert_eq!(result["logged_date"].as_str().unwrap(), "2025-06-01");
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_update_weight_entry_not_found() {
+        let db = TempDb::new().await;
+        let clock = clock();
+        let op = UpdateWeightEntry::new(clock).with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "entry_id": 99999,
+                "value": 80.0
+            })))
+            .await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().category, ErrorCategory::NotFound);
+    }
+
+    // ---- DeleteWeightEntry tests (AC #4) ----
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_delete_weight_entry_success() {
+        let db = TempDb::new().await;
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        let entry_id = seed_entry(&conn, "2025-01-15T08:00:00Z", "2025-01-15", 75.0).await;
+        drop(conn);
+
+        let op = DeleteWeightEntry::new().with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({ "entry_id": entry_id })))
+            .await
+            .unwrap();
+
+        assert!(result["deleted"].as_bool().unwrap());
+        assert_eq!(result["entry_id"].as_i64().unwrap(), entry_id);
+
+        // Verify entry is gone
+        let get_op = GetWeightByDate::new().with_db_path(db.path.clone());
+        let query_result = get_op
+            .execute_json(Arc::new(serde_json::json!({ "date": "2025-01-15" })))
+            .await
+            .unwrap();
+        assert!(query_result.as_array().unwrap().is_empty());
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_delete_weight_entry_not_found() {
+        let db = TempDb::new().await;
+        let op = DeleteWeightEntry::new().with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({ "entry_id": 99999 })))
+            .await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().category, ErrorCategory::NotFound);
+    }
+
+    // ---- GetWeightToday tests (AC #5) ----
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_weight_today_empty() {
+        let db = TempDb::new().await;
+        let clock = clock();
+        let op = GetWeightToday::new(clock).with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({})))
+            .await
+            .unwrap();
+        assert!(result.is_array());
+        assert!(result.as_array().unwrap().is_empty());
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_weight_today_populated() {
+        let db = TempDb::new().await;
+        let clock = clock();
+        let today_str = Clock::format_date(clock.today());
+
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        seed_entry(&conn, "2025-01-15T08:00:00Z", &today_str, 75.0).await;
+        seed_entry(&conn, "2025-01-15T12:00:00Z", &today_str, 76.0).await;
+        drop(conn);
+
+        let op = GetWeightToday::new(clock).with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({})))
+            .await
+            .unwrap();
+
+        let entries = result.as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        for entry in entries {
+            assert!(entry["id"].is_i64());
+            assert!(entry["logged_at"].is_string());
+            assert!(entry["logged_date"].is_string());
+            assert!(entry["value"].is_number());
+        }
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_weight_today_ordering_desc() {
+        let db = TempDb::new().await;
+        let clock = clock();
+        let today_str = Clock::format_date(clock.today());
+
+        // Insert in reverse chronological order
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        seed_entry(&conn, "2025-01-15T18:00:00Z", &today_str, 74.0).await;
+        seed_entry(&conn, "2025-01-15T12:00:00Z", &today_str, 75.0).await;
+        seed_entry(&conn, "2025-01-15T08:00:00Z", &today_str, 76.0).await;
+        drop(conn);
+
+        let op = GetWeightToday::new(clock).with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({})))
+            .await
+            .unwrap();
+
+        let entries = result.as_array().unwrap();
+        assert_eq!(entries.len(), 3);
+        // Should be newest-first (DESC by logged_at)
+        assert_eq!(
+            entries[0]["logged_at"].as_str().unwrap(),
+            "2025-01-15T18:00:00Z"
+        );
+        assert_eq!(
+            entries[1]["logged_at"].as_str().unwrap(),
+            "2025-01-15T12:00:00Z"
+        );
+        assert_eq!(
+            entries[2]["logged_at"].as_str().unwrap(),
+            "2025-01-15T08:00:00Z"
+        );
+    }
+
+    // ---- GetWeightByDate tests (AC #5) ----
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_weight_by_date_empty() {
+        let db = TempDb::new().await;
+        let op = GetWeightByDate::new().with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({ "date": "2025-01-15" })))
+            .await
+            .unwrap();
+        assert!(result.is_array());
+        assert!(result.as_array().unwrap().is_empty());
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_weight_by_date_populated() {
+        let db = TempDb::new().await;
         let test_date = "2025-01-15";
-        conn.execute(
-            "INSERT INTO weight_entries (logged_at, logged_date, value) VALUES (?, ?, ?)",
-            ("2025-01-15T08:00:00Z", test_date, 180.5),
-        )
-        .await
-        .unwrap();
-        conn.execute(
-            "INSERT INTO weight_entries (logged_at, logged_date, value) VALUES (?, ?, ?)",
-            ("2025-01-15T12:00:00Z", test_date, 179.0),
-        )
-        .await
-        .unwrap();
-        conn.execute(
-            "INSERT INTO weight_entries (logged_at, logged_date, value) VALUES (?, ?, ?)",
-            ("2025-01-15T18:00:00Z", test_date, 178.5),
-        )
-        .await
-        .unwrap();
+
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        seed_entry(&conn, "2025-01-15T08:00:00Z", test_date, 75.0).await;
+        seed_entry(&conn, "2025-01-15T12:00:00Z", test_date, 76.0).await;
         drop(conn);
 
         let op = GetWeightByDate::new().with_db_path(db.path.clone());
@@ -813,20 +1124,133 @@ mod tests {
             .await
             .unwrap();
 
-        let entries = result.as_array().expect("should return an array");
-        assert_eq!(entries.len(), 3, "all seeded entries must be returned");
-
-        // Verify ordered by logged_at DESC (latest first)
-        assert_eq!(entries[0]["value"].as_f64().unwrap(), 178.5);
-        assert_eq!(entries[1]["value"].as_f64().unwrap(), 179.0);
-        assert_eq!(entries[2]["value"].as_f64().unwrap(), 180.5);
-
-        // Verify all fields present on each entry
+        let entries = result.as_array().unwrap();
+        assert_eq!(entries.len(), 2);
         for entry in entries {
             assert!(entry["id"].is_i64());
             assert!(entry["logged_at"].is_string());
             assert!(entry["logged_date"].is_string());
             assert!(entry["value"].is_number());
         }
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_weight_by_date_ordering_desc() {
+        let db = TempDb::new().await;
+        let test_date = "2025-01-15";
+
+        // Insert in reverse chronological order
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        seed_entry(&conn, "2025-01-15T18:00:00Z", test_date, 74.0).await;
+        seed_entry(&conn, "2025-01-15T12:00:00Z", test_date, 75.0).await;
+        seed_entry(&conn, "2025-01-15T08:00:00Z", test_date, 76.0).await;
+        drop(conn);
+
+        let op = GetWeightByDate::new().with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({ "date": test_date })))
+            .await
+            .unwrap();
+
+        let entries = result.as_array().unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(
+            entries[0]["logged_at"].as_str().unwrap(),
+            "2025-01-15T18:00:00Z"
+        );
+        assert_eq!(
+            entries[1]["logged_at"].as_str().unwrap(),
+            "2025-01-15T12:00:00Z"
+        );
+        assert_eq!(
+            entries[2]["logged_at"].as_str().unwrap(),
+            "2025-01-15T08:00:00Z"
+        );
+    }
+
+    // ---- GetWeightByDateRange tests (AC #5) ----
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_weight_by_date_range_empty() {
+        let db = TempDb::new().await;
+        let op = GetWeightByDateRange::new().with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-31"
+            })))
+            .await
+            .unwrap();
+        assert!(result.is_array());
+        assert!(result.as_array().unwrap().is_empty());
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_weight_by_date_range_populated() {
+        let db = TempDb::new().await;
+
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        seed_entry(&conn, "2025-01-10T08:00:00Z", "2025-01-10", 75.0).await;
+        seed_entry(&conn, "2025-01-20T12:00:00Z", "2025-01-20", 76.0).await;
+        drop(conn);
+
+        let op = GetWeightByDateRange::new().with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-31"
+            })))
+            .await
+            .unwrap();
+
+        let entries = result.as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        for entry in entries {
+            assert!(entry["id"].is_i64());
+            assert!(entry["logged_at"].is_string());
+            assert!(entry["logged_date"].is_string());
+            assert!(entry["value"].is_number());
+        }
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_weight_by_date_range_ordering_desc() {
+        let db = TempDb::new().await;
+
+        // Insert in reverse chronological order across dates
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        seed_entry(&conn, "2025-01-15T18:00:00Z", "2025-01-15", 74.0).await;
+        seed_entry(&conn, "2025-01-10T12:00:00Z", "2025-01-10", 75.0).await;
+        seed_entry(&conn, "2025-01-05T08:00:00Z", "2025-01-05", 76.0).await;
+        drop(conn);
+
+        let op = GetWeightByDateRange::new().with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-31"
+            })))
+            .await
+            .unwrap();
+
+        let entries = result.as_array().unwrap();
+        assert_eq!(entries.len(), 3);
+        // Should be newest-first (DESC by logged_at)
+        assert_eq!(
+            entries[0]["logged_at"].as_str().unwrap(),
+            "2025-01-15T18:00:00Z"
+        );
+        assert_eq!(
+            entries[1]["logged_at"].as_str().unwrap(),
+            "2025-01-10T12:00:00Z"
+        );
+        assert_eq!(
+            entries[2]["logged_at"].as_str().unwrap(),
+            "2025-01-05T08:00:00Z"
+        );
     }
 }

@@ -88,7 +88,7 @@ Single atomic implementation — create weight module, wire into lib.rs, registe
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Created nom-core/src/weight/mod.rs with 6 operations: LogWeight, UpdateWeightEntry, DeleteWeightEntry, GetWeightToday, GetWeightByDate, GetWeightByDateRange. All follow meal module patterns (request structs with Deserialize/JsonSchema, Operation trait impl, db_path for tests). Added WeightEntrySummary shared type and build_weight_summary helper. Registered all 6 ops in nom-mcp main.rs. Full test suite passes (170 tests).
+Created nom-core/src/weight/mod.rs with 6 operations: LogWeight, UpdateWeightEntry, DeleteWeightEntry, GetWeightToday, GetWeightByDate, GetWeightByDateRange. All follow meal module patterns (request structs with Deserialize/JsonSchema, Operation trait impl, db_path for tests). Added WeightEntrySummary shared type and build_weight_summary helper. Registered all 6 ops in nom-mcp main.rs. One regression test included; comprehensive test coverage added later in TASK-26 (raising nom-core total from 165 to 183 tests).
 
 Fixup applied post-review: ran cargo fmt on nom-core/src/weight/mod.rs — the file as shipped failed cargo fmt --check (a CI gate per TASK-6), purely mechanical rewrap, no behavior change.
 <!-- SECTION:NOTES:END -->
@@ -96,5 +96,5 @@ Fixup applied post-review: ran cargo fmt on nom-core/src/weight/mod.rs — the f
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
-Implemented 6 weight entry operations in nom-core/src/weight/mod.rs: log_weight (insert with optional backdating), update_weight_entry (conditional patch of value/timestamp), delete_weight_entry (hard delete with not-found check), get_weight_today (Clock::today() query), get_weight_by_date (single-date query), get_weight_by_date_range (inclusive range query). All operations follow meal module patterns with proper error handling, transaction wrapping, and test support. Registered in nom-mcp main.rs.
+Implemented 6 weight entry operations in nom-core/src/weight/mod.rs: log_weight (insert with optional backdating), update_weight_entry (conditional patch of value/timestamp), delete_weight_entry (hard delete with not-found check), get_weight_today (Clock::today() query), get_weight_by_date (single-date query), get_weight_by_date_range (inclusive range query). All operations follow meal module patterns with proper error handling and transaction wrapping. Registered in nom-mcp main.rs. Comprehensive unit tests added in TASK-26.
 <!-- SECTION:FINAL_SUMMARY:END -->

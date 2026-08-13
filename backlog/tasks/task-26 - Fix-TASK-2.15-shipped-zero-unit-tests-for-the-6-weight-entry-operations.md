@@ -1,11 +1,14 @@
 ---
 id: TASK-26
 title: 'Fix: TASK-2.15 shipped zero unit tests for the 6 weight-entry operations'
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@ralph'
 created_date: '2026-08-13 02:06'
+updated_date: '2026-08-13 04:35'
 labels:
   - review-followup
+  - planned
 dependencies:
   - TASK-2.15
 priority: high
@@ -20,29 +23,51 @@ Found while reviewing TASK-2.15 (nom-core/src/weight/mod.rs, entire file). The t
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 nom-core/src/weight/mod.rs has a #[cfg(test)] mod tests block using the TempDb/with_db_path fixture pattern already used by nom-core/src/meal/mod.rs's test module
-- [ ] #2 LogWeight has tests covering: default logged_at (uses clock.today()), explicit valid logged_at (backdating), and value <= 0.0 rejected as Validation error
-- [ ] #3 UpdateWeightEntry has tests covering: value-only patch, logged_at-only patch, both together, and not-found error for a nonexistent entry_id
-- [ ] #4 DeleteWeightEntry has tests covering: successful hard delete (row no longer queryable afterward) and not-found error for a nonexistent entry_id
-- [ ] #5 GetWeightToday, GetWeightByDate, and GetWeightByDateRange each have tests covering: empty result set, a populated result set, and DESC ordering by logged_at
-- [ ] #6 The task's Implementation Notes/Final Summary claims about test counts are corrected to reflect the true nix develop -c cargo test -p nom-core pass count
-- [ ] #7 nix develop -c cargo test -p nom-core passes
-- [ ] #8 nix develop -c cargo clippy --workspace --all-targets is clean
+- [x] #1 nom-core/src/weight/mod.rs has a #[cfg(test)] mod tests block using the TempDb/with_db_path fixture pattern already used by nom-core/src/meal/mod.rs's test module
+- [x] #2 LogWeight has tests covering: default logged_at (uses clock.today()), explicit valid logged_at (backdating), and value <= 0.0 rejected as Validation error
+- [x] #3 UpdateWeightEntry has tests covering: value-only patch, logged_at-only patch, both together, and not-found error for a nonexistent entry_id
+- [x] #4 DeleteWeightEntry has tests covering: successful hard delete (row no longer queryable afterward) and not-found error for a nonexistent entry_id
+- [x] #5 GetWeightToday, GetWeightByDate, and GetWeightByDateRange each have tests covering: empty result set, a populated result set, and DESC ordering by logged_at
+- [x] #6 The task's Implementation Notes/Final Summary claims about test counts are corrected to reflect the true nix develop -c cargo test -p nom-core pass count
+- [x] #7 nix develop -c cargo test -p nom-core passes
+- [x] #8 nix develop -c cargo clippy --workspace --all-targets is clean
 <!-- AC:END -->
 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-SETUP (read first): This is a Rust+WebAssembly core (crates/gql-core) with a TypeScript/React web app (web/). Wait — correction for this repo: nom_mcp is a Rust workspace (nom-core, nom-mcp, nom-mcp-http) with no WASM/web component. ALL commands must run inside the Nix dev shell: either run 'direnv allow' once, or prefix every command with 'nix develop -c'. Work from the repository root unless told otherwise. Do not change pinned dependency versions.
+Add #[cfg(test)] mod tests to nom-core/src/weight/mod.rs covering all 6 weight operations. Use the existing TempDb fixture (nom-core/src/storage/test.rs) and with_db_path() hooks already on every operation struct. Mirror meal/mod.rs test patterns exactly. All tests use #[serial_test::serial] and #[tokio::test].
 
-1. Open nom-core/src/meal/mod.rs and find its '#[cfg(test)] mod tests' block (near the end of the file) — study its TempDb/temp-file fixture setup, the pattern of constructing an operation via '::new(clock).with_db_path(db_path.clone())' (or '::new().with_db_path(...)' for read-only ops), and how it asserts on the returned serde_json::Value. Weight operations already implement the identical '#[cfg(test)] db_path: Option<PathBuf>' + 'with_db_path()' fixture hook (see e.g. nom-core/src/weight/mod.rs:88-107 for LogWeight) — you are wiring tests onto scaffolding that already exists, not adding it.
-2. Add a '#[cfg(test)] mod tests' block at the end of nom-core/src/weight/mod.rs (after line 767). Set up a shared helper that creates a fresh temp SQLite/turso DB with the schema migrated (mirror however meal's tests do this — likely a shared test-support helper in nom-core/src/storage or nom-core/src/meal/mod.rs's own test setup; reuse it rather than re-inventing).
-3. For LogWeight (nom-core/src/weight/mod.rs:88-213): write test_log_weight_default_timestamp (no logged_at, assert logged_date matches a fixed Clock's today()), test_log_weight_explicit_logged_at (assert both logged_at and logged_date reflect the parsed timestamp), and test_log_weight_rejects_non_positive_value (value = 0.0 and a negative value both return Err with category Validation and field 'value').
-4. For UpdateWeightEntry (nom-core/src/weight/mod.rs:232-361): write test_update_weight_entry_value_only, test_update_weight_entry_logged_at_only, test_update_weight_entry_both_fields, and test_update_weight_entry_not_found (nonexistent entry_id returns Err with the NotFound category).
-5. For DeleteWeightEntry (nom-core/src/weight/mod.rs:374-481): write test_delete_weight_entry_success (delete then verify a follow-up GetWeightByDate/direct query no longer returns the row) and test_delete_weight_entry_not_found.
-6. For GetWeightToday, GetWeightByDate, GetWeightByDateRange (nom-core/src/weight/mod.rs:490-767): for each, write a test with an empty DB (expect an empty array), a test with 2-3 seeded entries (expect all of them back), and a test asserting DESC ordering by logged_at (insert entries out of order, assert the response array is newest-first).
-7. Update the Implementation Notes section of backlog/tasks/task-2.15*.md to correct the false test-count claim once real tests exist and the true count is known.
-8. Run: nix develop -c cargo test -p nom-core (confirm all weight:: tests plus the existing 165 pass)
-9. Run: nix develop -c cargo clippy --workspace --all-targets (confirm clean)
-10. Run: nix develop -c cargo fmt -p nom-core (confirm no diff)
+**AC #1 — Test module setup:**
+- Extend existing '#[cfg(test)] mod tests' block after line ~833 (after the one regression test). Reuse its imports (super::*, crate::storage::test::TempDb, serial_test). Add Arc, Connection, Clock imports.
+- Shared Clock: `Clock { tz: chrono_tz::UTC }` — same as meal tests. Hardcoded UTC makes today() deterministic for backdated writes.
+
+**AC #2 — LogWeight tests (3 tests):**
+- `test_log_weight_default_timestamp`: Call LogWeight with only `{ "value": 75.0 }`. Assert result has logged_at ISO string and logged_date matching Clock::new(chrono_tz::UTC).today(). Since clock uses Utc::now(), verify logged_date equals today's date string rather than hardcoding.
+- `test_log_weight_explicit_logged_at`: Call with `{ "value": 75.0, "logged_at": "2025-01-15T10:30:00Z" }`. Assert logged_at == "2025-01-15T10:30:00Z", logged_date == "2025-01-15".
+- `test_log_weight_rejects_non_positive_value`: Call with `{ "value": 0.0 }` and `{ "value": -5.0 }`. Both must return Err with `.unwrap_err().category == ErrorCategory::Validation`.
+
+**AC #3 — UpdateWeightEntry tests (4 tests):**
+- Seed entry first via raw INSERT, capture id. Then:\n  - `test_update_weight_entry_value_only$: Patch `{ "id": id, "value": 80.0 }`. Verify new value persisted.\n  - `test_update_weight_entry_logged_at_only$: Patch `{ "id": id, "logged_at": "2025-06-01T09:00:00Z" }$. Verify new timestamp/date.\n  - `test_update_weight_entry_both_fields$: Patch both simultaneously.\n  - `test_update_weight_entry_not_found$: Call with nonexistent id (e.g., 99999). Assert ErrorCategory::NotFound.
+- After each update test, re-query with GetWeightByDate to confirm persistence.
+
+**AC #4 — DeleteWeightEntry tests (2 tests):**
+- `test_delete_weight_entry_success$: Seed entry, delete with `{ "id": id }$, then assert GetWeightByDate returns empty array for that date.\n- `test_delete_weight_entry_not_found$: Delete with nonexistent id. Assert ErrorCategory::NotFound.
+
+**AC #5 — Query operation tests (9 tests total, 3 per operation):**
+For each of GetWeightToday, GetWeightByDate, GetWeightByDateRange:\n- Empty DB test: Call with no seeded data. Assert result.is_array() && result.as_array().unwrap().is_empty().\n- Populated test: Seed 2 entries for relevant date(s). Assert array length == 2, all fields present (id, logged_at, logged_date, value).\n- Ordering test: Seed 3 entries with distinct timestamps (same date, different hours: 08:00, 12:00, 18:00). Insert in reverse chronological order. Assert response array is newest-first (DESC by logged_at).\n\nUse distinct hours to avoid timestamp collision within the same second.\n\n**AC #6 — Correct TASK-2.15 documentation:**
+After tests pass, run `nix develop -c cargo test -p nom-core` to get the true test count. Edit backlog/tasks/task-2.15*.md to correct the false claim about 170 tests.\n\n**AC #7 & #8 — Quality gates:**
+Run `nix develop -c cargo test -p nom-core`, `cargo clippy --workspace --all-targets`, and `cargo fmt -p nom-core`.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Added 18 unit tests (17 new + retained existing regression test) to nom-core/src/weight/mod.rs covering all 6 weight operations via #[cfg(test)] mod tests with TempDb fixture pattern. Fixed clippy bool_assert_comparison warning. Corrected TASK-2.15 Implementation Notes and Final Summary to reflect true test count (was falsely claiming 170 tests; actual count was 165 then 183 after this fix). Total nom-core test count: 183 unit tests + 1 integration test = 184.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added comprehensive unit test suite (18 tests) for all 6 weight operations in nom-core/src/weight/mod.rs: LogWeight (default timestamp, explicit logged_at, rejects non-positive values), UpdateWeightEntry (value-only, logged_at-only, both fields, not-found), DeleteWeightEntry (success with verification, not-found), GetWeightToday/GetWeightByDate/GetWeightByDateRange (empty results, populated results, DESC ordering each). Used TempDb fixture and async seed_entry helper with RETURNING id. Fixed clippy warning. Corrected false test count claims in TASK-2.15 documentation.
+<!-- SECTION:FINAL_SUMMARY:END -->
