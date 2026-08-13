@@ -1764,6 +1764,88 @@ mod tests {
         );
     }
 
+    /// Regression test: update_meal with portions: [] must clear ALL existing portions
+    /// and recompute materialized totals to reflect zero portions.
+    /// Without this test, a future refactor could silently skip the delete-then-insert
+    /// when the array is empty, leaving stale portions and incorrect totals.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_update_meal_empty_portions_clears_all() {
+        // SETUP — seed a food and log a meal with 2 portions
+        let db = TempDb::new().await;
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        let food_a = seed_food(&conn, "Chicken").await.unwrap();
+        let food_b = seed_food(&conn, "Rice").await.unwrap();
+        drop(conn);
+
+        let clock = Clock { tz: chrono_tz::UTC };
+        let log_op = LogMeal::new(clock).with_db_path(db.path.clone());
+        let log_result = log_op
+            .execute_json(Arc::new(serde_json::json!({
+                "portions": [
+                    {"food_id": food_a, "quantity": 100.0, "quantity_mode": "grams"},
+                    {"food_id": food_b, "quantity": 200.0, "quantity_mode": "grams"}
+                ]
+            })))
+            .await
+            .unwrap();
+        let meal_id = log_result["meal_id"].as_i64().unwrap();
+
+        // Verify initial totals: 100g Chicken (250 cal) + 200g Rice (500 cal) = 750 cal
+        assert_eq!(log_result["totals"]["total_calories"], 750.0);
+
+        // Verify DB has 2 portions before the update
+        {
+            let conn_check = Connection::open_at(&db.path).await.unwrap();
+            let mut stmt = conn_check
+                .prepare("SELECT COUNT(*) FROM portions WHERE meal_id = ?")
+                .await
+                .unwrap();
+            let mut rows = stmt.query((meal_id,)).await.unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            let count: i64 = row.get(0).unwrap();
+            assert_eq!(count, 2, "Should have 2 portions before clear");
+        }
+
+        // ACT — call update_meal with explicit empty portions array
+        let update_op = UpdateMeal::new(clock).with_db_path(db.path.clone());
+        let update_result = update_op
+            .execute_json(Arc::new(serde_json::json!({
+                "meal_id": meal_id,
+                "portions": []
+            })))
+            .await
+            .unwrap();
+
+        // ASSERT — portions are cleared
+        assert_eq!(
+            update_result["portions"].as_array().unwrap().len(),
+            0,
+            "Empty portions array should clear all existing portions"
+        );
+
+        // ASSERT — materialized totals recomputed for zero portions (all zeros)
+        assert_eq!(
+            update_result["totals"]["total_calories"], 0.0,
+            "Totals should be zero after clearing all portions (no adjustment)"
+        );
+        assert_eq!(update_result["totals"]["total_protein_g"], 0.0);
+        assert_eq!(update_result["totals"]["total_carbs_g"], 0.0);
+        assert_eq!(update_result["totals"]["total_fat_g"], 0.0);
+        assert_eq!(update_result["totals"]["total_fiber_g"], 0.0);
+
+        // VERIFY at DB level — portions table has no rows for this meal
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        let mut stmt = conn
+            .prepare("SELECT COUNT(*) FROM portions WHERE meal_id = ?")
+            .await
+            .unwrap();
+        let mut rows = stmt.query((meal_id,)).await.unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let count: i64 = row.get(0).unwrap();
+        assert_eq!(count, 0, "Portions table should have zero rows for cleared meal");
+    }
+
     #[serial_test::serial]
     #[tokio::test]
     async fn test_update_meal_partial_patch_adjustment_only() {
