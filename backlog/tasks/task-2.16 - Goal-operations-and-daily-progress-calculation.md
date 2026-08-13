@@ -4,12 +4,15 @@ title: Goal operations and daily-progress calculation
 status: To Do
 assignee: []
 created_date: '2026-08-11 13:24'
+updated_date: '2026-08-13 02:07'
 labels: []
 dependencies:
   - TASK-2.5
   - TASK-2.7
   - TASK-2.14
   - TASK-2.15
+  - TASK-26
+  - TASK-27
 type: feature
 ordinal: 35000
 ---
