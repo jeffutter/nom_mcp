@@ -2,6 +2,7 @@
 //! Acquires an exclusive write lock on the file given via NOM_HOLD_LOCK_PATH
 //! and sleeps until killed.
 
+use std::io::Write;
 use std::path::Path;
 
 fn hold_lock(path: &Path) {
@@ -20,6 +21,9 @@ fn hold_lock(path: &Path) {
         l_pid: 0,
     };
     unsafe { libc::fcntl(fd, libc::F_SETLKW, &mut flock) };
+    // Ack parent: we hold the lock now
+    std::io::stdout().write_all(b"1").unwrap();
+    std::io::stdout().flush().unwrap();
     // Keep sleeping; the file handle stays alive keeping the lock held.
     std::thread::sleep(std::time::Duration::from_secs(300));
 }
