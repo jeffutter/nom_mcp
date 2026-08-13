@@ -7,7 +7,7 @@ status: Done
 assignee:
   - '@ralph'
 created_date: '2026-08-13 02:07'
-updated_date: '2026-08-13 02:23'
+updated_date: '2026-08-13 02:27'
 labels:
   - review-followup
   - planned
@@ -80,6 +80,12 @@ build_weight_summary is retained for its remaining caller (UpdateWeightEntry pos
 ### Why No Sub-Tickets
 All changes are in a single file, tightly coupled (same pattern applied to 3 functions), and total diff is under 60 lines. Splitting into sub-tickets would create coordination overhead without meaningful independent shippability.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Fixup applied post-review: extracted duplicated row->WeightEntrySummary mapping (identical in GetWeightToday/GetWeightByDate/GetWeightByDateRange, satisfying the Rule of Three) into a shared weight_entry_summary_from_row() helper; also ran cargo fmt -p nom-core, which the original commit had skipped (cargo fmt --check was failing on weight/mod.rs).
+<!-- SECTION:NOTES:END -->
 
 ## Final Summary
 

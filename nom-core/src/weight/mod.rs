@@ -34,6 +34,24 @@ pub struct WeightEntrySummary {
     pub value: f64,
 }
 
+/// Map a `SELECT id, logged_at, logged_date, value` row to a `WeightEntrySummary`.
+fn weight_entry_summary_from_row(row: &turso::Row) -> Result<WeightEntrySummary, ErrorData> {
+    Ok(WeightEntrySummary {
+        id: row
+            .get::<i64>(0)
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+        logged_at: row
+            .get::<String>(1)
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+        logged_date: row
+            .get::<String>(2)
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+        value: row
+            .get::<f64>(3)
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
+    })
+}
+
 /// Build a WeightEntrySummary from a single DB row.
 async fn build_weight_summary(
     conn: &Connection,
@@ -555,12 +573,7 @@ impl Operation for GetWeightToday {
             .await
             .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
         {
-            summaries.push(WeightEntrySummary {
-                id: row.get::<i64>(0).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-                logged_at: row.get::<String>(1).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-                logged_date: row.get::<String>(2).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-                value: row.get::<f64>(3).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-            });
+            summaries.push(weight_entry_summary_from_row(&row)?);
         }
 
         Ok(serde_json::to_value(summaries)
@@ -651,12 +664,7 @@ impl Operation for GetWeightByDate {
             .await
             .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
         {
-            summaries.push(WeightEntrySummary {
-                id: row.get::<i64>(0).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-                logged_at: row.get::<String>(1).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-                logged_date: row.get::<String>(2).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-                value: row.get::<f64>(3).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-            });
+            summaries.push(weight_entry_summary_from_row(&row)?);
         }
 
         Ok(serde_json::to_value(summaries)
@@ -753,12 +761,7 @@ impl Operation for GetWeightByDateRange {
             .await
             .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
         {
-            summaries.push(WeightEntrySummary {
-                id: row.get::<i64>(0).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-                logged_at: row.get::<String>(1).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-                logged_date: row.get::<String>(2).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-                value: row.get::<f64>(3).map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?,
-            });
+            summaries.push(weight_entry_summary_from_row(&row)?);
         }
 
         Ok(serde_json::to_value(summaries)
@@ -787,15 +790,21 @@ mod tests {
         conn.execute(
             "INSERT INTO weight_entries (logged_at, logged_date, value) VALUES (?, ?, ?)",
             ("2025-01-15T08:00:00Z", test_date, 180.5),
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
         conn.execute(
             "INSERT INTO weight_entries (logged_at, logged_date, value) VALUES (?, ?, ?)",
             ("2025-01-15T12:00:00Z", test_date, 179.0),
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
         conn.execute(
             "INSERT INTO weight_entries (logged_at, logged_date, value) VALUES (?, ?, ?)",
             ("2025-01-15T18:00:00Z", test_date, 178.5),
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
         drop(conn);
 
         let op = GetWeightByDate::new().with_db_path(db.path.clone());
