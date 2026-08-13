@@ -97,6 +97,52 @@ fn fetch_from_server(
 mod tests {
     use super::*;
 
+    // -- TestGuard for config isolation (matches nom-core/src/config.rs) --
+
+    struct TestGuard {
+        temp_dir: Option<std::path::PathBuf>,
+        saved_xdg: Option<String>,
+        cleared_vars: Vec<String>,
+    }
+
+    impl TestGuard {
+        fn new() -> Self {
+            Self {
+                temp_dir: None,
+                saved_xdg: std::env::var_os("XDG_CONFIG_HOME")
+                    .map(|v| v.to_string_lossy().to_string()),
+                cleared_vars: Vec::new(),
+            }
+        }
+
+        fn set(&mut self, key: &str, value: &str) {
+            unsafe { std::env::set_var(key, value) };
+            self.cleared_vars.push(key.to_string());
+        }
+
+        fn set_temp_dir(&mut self, path: std::path::PathBuf) {
+            self.temp_dir = Some(path);
+        }
+    }
+
+    impl Drop for TestGuard {
+        fn drop(&mut self) {
+            if let Some(saved) = &self.saved_xdg {
+                if saved.is_empty() {
+                    unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+                } else {
+                    unsafe { std::env::set_var("XDG_CONFIG_HOME", saved) };
+                }
+            }
+            for var in &self.cleared_vars {
+                unsafe { std::env::remove_var(var) };
+            }
+            if let Some(ref dir) = self.temp_dir {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+    }
+
     // -- execute_from_args validation tests --
 
     #[test]
@@ -105,6 +151,57 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.category, nom_core::error::ErrorCategory::Validation);
+    }
+
+    #[serial_test::serial]
+    #[test]
+    fn test_execute_from_args_missing_server_url() {
+        // Point XDG_CONFIG_HOME at a nonexistent dir so no config.toml is loaded.
+        // AppConfig will load with defaults, and remote.server_url will be None.
+        let mut guard = TestGuard::new();
+        guard.set("XDG_CONFIG_HOME", "/tmp/nom_mcp_test_missing_url_12345");
+
+        let result = execute_from_args(&[
+            "nom-mcp-remote".into(),
+            "search_food".into(),
+            "query=almonds".into(),
+        ]);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.category, nom_core::error::ErrorCategory::Validation);
+        assert_eq!(err.field, Some("server_url".to_string()));
+    }
+
+    #[serial_test::serial]
+    #[test]
+    fn test_execute_from_args_invalid_server_url() {
+        // Create a temp config with a malformed server_url.
+        let mut guard = TestGuard::new();
+        let temp_dir = std::env::temp_dir().join("nom_mcp_test_invalid_url");
+        let config_dir = temp_dir.join("config");
+        let file_path = config_dir.join("nom_mcp").join("config.toml");
+
+        std::fs::create_dir_all(config_dir.join("nom_mcp")).ok();
+        std::fs::write(
+            &file_path,
+            r#"[remote]
+server_url = "not a url"
+"#,
+        )
+        .expect("failed to write test config");
+
+        guard.set_temp_dir(temp_dir.clone());
+        guard.set("XDG_CONFIG_HOME", &config_dir.to_string_lossy());
+
+        let result = execute_from_args(&[
+            "nom-mcp-remote".into(),
+            "search_food".into(),
+            "query=almonds".into(),
+        ]);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.category, nom_core::error::ErrorCategory::Validation);
+        assert_eq!(err.field, Some("server_url".to_string()));
     }
 
     // Integration tests — run blocking HTTP client on a std::thread to avoid
