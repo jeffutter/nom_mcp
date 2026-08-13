@@ -314,18 +314,17 @@ fn extract_off_macros(product: &crate::client::off::Product) -> NutrientValues {
 }
 
 /// Merge search results: Custom-first ordering, deduplicate by name (case-insensitive), cap at total.
+///
+/// Within each group (Custom, then USDA) the incoming order is preserved rather
+/// than re-sorted, since callers pass candidates in relevance order (Custom
+/// results from the DB match, USDA results in the search API's relevance
+/// ranking). Re-sorting alphabetically here would bury the most relevant hit
+/// under any candidate whose name happens to start earlier in the alphabet.
 fn merge_candidates(mut candidates: Vec<FoodCandidate>, cap: usize) -> Vec<FoodCandidate> {
-    // Sort: Custom first, then by name
-    candidates.sort_by(|a, b| {
-        let a_is_custom = a.source == "Custom";
-        let b_is_custom = b.source == "Custom";
-        // Invert comparison so Custom (true) sorts before non-Custom (false)
-        b_is_custom
-            .cmp(&a_is_custom)
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
+    // Stable sort on Custom-vs-not only — preserves relevance order within each group.
+    candidates.sort_by_key(|c| c.source != "Custom");
 
-    // Deduplicate by name (case-insensitive)
+    // Deduplicate by name (case-insensitive), keeping the first (most relevant) occurrence.
     let mut seen = std::collections::HashSet::new();
     candidates.retain(|c| seen.insert(c.name.to_lowercase()));
 
@@ -475,12 +474,34 @@ impl SearchFood {
             match fdc.search_foods(query, 1).await {
                 Ok(search_resp) => {
                     if !search_resp.food_matches.is_empty() {
-                        let ids: Vec<i64> =
-                            search_resp.food_matches.iter().map(|m| m.fdc_id).collect();
+                        // Only fetch details for a small buffer past the final cap
+                        // (some may be deduped against Custom results below) — the
+                        // search response is already in USDA's relevance order, so
+                        // taking the head keeps the most relevant hits and avoids
+                        // fetching full nutrient details for every one of the up to
+                        // 50 matches on the page.
+                        let ids: Vec<i64> = search_resp
+                            .food_matches
+                            .iter()
+                            .take(10)
+                            .map(|m| m.fdc_id)
+                            .collect();
 
                         // Batch-fetch details and upsert each
                         match fdc.get_foods_batch(&ids).await {
-                            Ok(foods) => {
+                            Ok(mut foods) => {
+                                // The batch endpoint doesn't guarantee it echoes
+                                // results back in request order — restore USDA's
+                                // relevance ranking before candidates are built.
+                                let rank: std::collections::HashMap<i64, usize> = ids
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, &id)| (id, i))
+                                    .collect();
+                                foods.sort_by_key(|f| {
+                                    rank.get(&f.fdc_id).copied().unwrap_or(usize::MAX)
+                                });
+
                                 for food in foods {
                                     let macros = food.extract_macros();
                                     let name = food.description.clone().unwrap_or_default();
