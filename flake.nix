@@ -24,6 +24,10 @@
         lib = nixpkgs.lib;
         craneLib = crane.mkLib pkgs;
 
+        # Single source of truth for the crate version — read from the workspace
+        # Cargo.toml so the flake never drifts out of sync with `cargo` itself.
+        version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
+
         # Single source of truth for the Rust toolchain (rustc/cargo/rustfmt/clippy
         # all from the same rust-overlay release) — nixpkgs' own `cargo`/`rustc`
         # are deliberately not used alongside it, since mixing the two pulls in two
@@ -52,7 +56,7 @@
           // envVars
         );
         cargoArtifacts = craneLib.buildDepsOnly (
-          commonArgs // { pname = "nom-mcp-workspace"; version = "0.1.0"; }
+          commonArgs // { pname = "nom-mcp-workspace"; inherit version; }
         );
 
         nom-mcp = craneLib.buildPackage (
@@ -60,7 +64,7 @@
           // {
             inherit cargoArtifacts;
             pname = "nom-mcp";
-            version = "0.1.0";
+            inherit version;
             cargoExtraArgs = "--bin nom-mcp";
           }
         );
@@ -70,7 +74,7 @@
           // {
             inherit cargoArtifacts;
             pname = "nom-mcp-remote";
-            version = "0.1.0";
+            inherit version;
             cargoExtraArgs = "--bin nom-mcp-remote";
           }
         );
