@@ -33,5 +33,5 @@ The MCP Resource surfacing a rolling 7-day nutrition and weight snapshot: daily-
 _Avoid_: Weekly Report, Dashboard
 
 **Widget Display**:
-A single global on/off user preference, settable only via MCP (no CLI/HTTP equivalent), that will govern whether an MCP client renders visual widgets instead of plain text/JSON. Persisted in its own settings storage, separate from startup Config. v1 stores and exposes it but no tool or Resource output branches on it yet.
+A single global on/off user preference, settable only via MCP (no CLI/HTTP equivalent), that governs whether an MCP client renders visual widgets instead of plain text/JSON. Persisted in its own settings storage, separate from startup Config. `get_goal_progress` is the first real consumer: when enabled, its `list_tools` declaration carries a `_meta.ui.resourceUri` pointing at a `ui://` MCP Apps widget resource (per SEP-1865 / modelcontextprotocol/ext-apps); `call_tool` output itself never changes. (`TASK-41`)
 _Avoid_: Widget Toggle (names the action of flipping it, not the preference itself)

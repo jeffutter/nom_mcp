@@ -1,7 +1,9 @@
 //! Widget Display — MCP-only operations for enabling/disabling widget display.
 //!
 //! Backed by the `settings` table (`widget_display_enabled` BOOLEAN).
-//! v1 is plumbing only — no tool or Resource output branches on it yet.
+//! `get_goal_progress`'s `list_tools` output gates its MCP Apps `_meta.ui`
+//! pointer on this flag (see `crate::operation::mcp_handler`, TASK-41) — the
+//! first real consumer beyond the get/set tools below.
 
 use std::sync::Arc;
 
@@ -11,6 +13,42 @@ use serde::Deserialize;
 use crate::error::ErrorData;
 use crate::operation::{Operation, Surfaces};
 use crate::storage::Connection;
+
+/// Read the current widget display preference, defaulting to `false` when no
+/// `settings` row exists yet.
+///
+/// Single source of truth for the flag's storage shape — used by both
+/// `GetWidgetDisplay` and `mcp_handler::list_tools`, which gates
+/// `get_goal_progress`'s `_meta.ui` pointer on it.
+pub(crate) async fn widget_display_enabled(conn: &Connection) -> Result<bool, ErrorData> {
+    let sql = "SELECT widget_display_enabled FROM settings LIMIT 1";
+    let mut stmt = conn
+        .prepare(sql)
+        .await
+        .map_err(|e| ErrorData::storage_failure(format!("prepare failed: {e}")))?;
+    let mut rows = stmt
+        .query(())
+        .await
+        .map_err(|e| ErrorData::storage_failure(format!("query failed: {e}")))?;
+
+    let enabled = match rows
+        .next()
+        .await
+        .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
+    {
+        Some(row) => row
+            .get_value(0)
+            .map(|v| match v {
+                turso::Value::Integer(n) => n != 0,
+                turso::Value::Real(r) => r != 0.0,
+                _ => false,
+            })
+            .unwrap_or(false),
+        None => false,
+    };
+
+    Ok(enabled)
+}
 
 // ---------------------------------------------------------------------------
 // GetWidgetDisplay Operation
@@ -70,31 +108,7 @@ impl Operation for GetWidgetDisplay {
         #[cfg(not(test))]
         let conn = Connection::open().await?;
 
-        let sql = "SELECT widget_display_enabled FROM settings LIMIT 1";
-        let mut stmt = conn
-            .prepare(sql)
-            .await
-            .map_err(|e| ErrorData::storage_failure(format!("prepare failed: {e}")))?;
-        let mut rows = stmt
-            .query(())
-            .await
-            .map_err(|e| ErrorData::storage_failure(format!("query failed: {e}")))?;
-
-        let enabled = match rows
-            .next()
-            .await
-            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
-        {
-            Some(row) => row
-                .get_value(0)
-                .map(|v| match v {
-                    turso::Value::Integer(n) => n != 0,
-                    turso::Value::Real(r) => r != 0.0,
-                    _ => false,
-                })
-                .unwrap_or(false),
-            None => false,
-        };
+        let enabled = widget_display_enabled(&conn).await?;
 
         Ok(serde_json::json!({ "enabled": enabled }))
     }

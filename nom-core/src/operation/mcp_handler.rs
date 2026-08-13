@@ -23,6 +23,36 @@ use super::{Operation, OperationRegistry, Surfaces};
 use crate::clock::Clock;
 use crate::storage::Connection;
 
+/// URI of the MCP Apps UI resource for `get_goal_progress`'s widget.
+///
+/// Not listed in `build_resources()`/`list_resources()` — per the MCP Apps
+/// spec, UI-only resources are discovered via the tool's own
+/// `_meta.ui.resourceUri` (see `goal_progress_ui_meta`), not the general
+/// resource listing.
+const GOAL_PROGRESS_UI_RESOURCE_URI: &str = "ui://nom-mcp/goal-progress";
+
+/// Static widget HTML served for [`GOAL_PROGRESS_UI_RESOURCE_URI`].
+///
+/// Self-contained (inline CSS/JS, no external requests) because the MCP Apps
+/// spec's restrictive default CSP — applied whenever a UI resource declares
+/// no `csp` domains, which this one deliberately doesn't — blocks anything
+/// else (`connect-src 'none'`, `script-src 'self' 'unsafe-inline'`).
+const GOAL_PROGRESS_WIDGET_HTML: &str = include_str!("../../assets/goal_progress_widget.html");
+
+/// Build the `_meta.ui` object that points a Tool declaration at
+/// [`GOAL_PROGRESS_UI_RESOURCE_URI`], per the MCP Apps extension
+/// (SEP-1865 / modelcontextprotocol/ext-apps spec 2026-01-26).
+fn goal_progress_ui_meta() -> rmcp::model::MetaObject {
+    let mut ui = serde_json::Map::new();
+    ui.insert(
+        "resourceUri".to_string(),
+        serde_json::Value::String(GOAL_PROGRESS_UI_RESOURCE_URI.to_string()),
+    );
+    let mut meta = serde_json::Map::new();
+    meta.insert("ui".to_string(), serde_json::Value::Object(ui));
+    meta.into()
+}
+
 /// An MCP server handler backed by an OperationRegistry.
 ///
 /// Implements `list_tools` and `call_tool` by iterating the registry directly,
@@ -70,6 +100,52 @@ impl McpHandler {
                     .ok()
             })
             .collect()
+    }
+
+    /// Build the tool list, additionally gating `get_goal_progress`'s MCP
+    /// Apps `_meta.ui` pointer on the widget-display setting (TASK-41).
+    ///
+    /// Kept as a plain inherent method (mirroring `build_tools`/
+    /// `dispatch_read_resource`) so tests can call it directly without
+    /// constructing a `RequestContext<RoleServer>`.
+    pub(crate) async fn build_tools_gated(&self) -> Result<Vec<Tool>, ErrorData> {
+        let mut tools = self.build_tools();
+
+        #[cfg(test)]
+        let conn = if let Some(ref path) = self.db_path {
+            Connection::open_at(path).await.map_err(|e| {
+                ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("failed to open db: {e}"), None)
+            })?
+        } else {
+            Connection::open().await.map_err(|e| {
+                ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("failed to open db: {e}"), None)
+            })?
+        };
+
+        #[cfg(not(test))]
+        let conn = Connection::open().await.map_err(|e| {
+            ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("failed to open db: {e}"), None)
+        })?;
+
+        let widget_display_enabled = crate::widget::widget_display_enabled(&conn)
+            .await
+            .map_err(|e| {
+                ErrorData::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("failed to read widget display setting: {e}"),
+                    None,
+                )
+            })?;
+
+        if widget_display_enabled
+            && let Some(tool) = tools
+                .iter_mut()
+                .find(|t| t.name.as_ref() == "get_goal_progress")
+        {
+            tool.meta = Some(goal_progress_ui_meta());
+        }
+
+        Ok(tools)
     }
 
     /// Build the list of MCP resources this handler exposes.
@@ -145,11 +221,54 @@ impl McpHandler {
 
                 Ok(ReadResourceResult::new(vec![contents]))
             }
+            GOAL_PROGRESS_UI_RESOURCE_URI => {
+                // No DB access needed: this serves the static widget shell.
+                // Live data reaches it via the host's `ui/notifications/
+                // tool-result` bridge off the unchanged `call_tool` response,
+                // not by this handler re-querying on resource fetch.
+                let contents = ResourceContents::TextResourceContents {
+                    uri: uri.to_string(),
+                    mime_type: Some("text/html;profile=mcp-app".to_string()),
+                    text: GOAL_PROGRESS_WIDGET_HTML.to_string(),
+                    meta: None,
+                };
+                Ok(ReadResourceResult::new(vec![contents]))
+            }
             other => Err(ErrorData::new(
                 ErrorCode::INVALID_PARAMS,
                 format!("unknown resource URI: {}", other),
                 None,
             )),
+        }
+    }
+
+    /// Dispatch a `call_tool` request: look up the operation and invoke it,
+    /// wrapping the result/error into a `CallToolResult`.
+    ///
+    /// Pulled out as a plain async method (mirroring `dispatch_read_resource`)
+    /// so tests can exercise the exact same path the `ServerHandler` trait
+    /// method uses, without constructing a `RequestContext<RoleServer>`.
+    pub(crate) async fn dispatch_call_tool(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<CallToolResult, ErrorData> {
+        let op = self
+            .registry
+            .get(name)
+            .ok_or_else(|| ErrorData::invalid_params(format!("unknown tool: {}", name), None))?;
+
+        match op.execute_json(Arc::new(arguments)).await {
+            Ok(result) => {
+                // Serialize result as text content
+                let text = serde_json::to_string(&result).unwrap_or_else(|_| result.to_string());
+                Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+            }
+            Err(error_data) => {
+                // Return as tool-level error per doc-5 §10
+                let message = format!("{}", error_data);
+                Ok(CallToolResult::error(vec![ContentBlock::text(message)]))
+            }
         }
     }
 }
@@ -185,8 +304,7 @@ impl ServerHandler for McpHandler {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let tools = self.build_tools();
-        Ok(ListToolsResult::with_all_items(tools))
+        Ok(ListToolsResult::with_all_items(self.build_tools_gated().await?))
     }
 
     async fn call_tool(
@@ -194,28 +312,15 @@ impl ServerHandler for McpHandler {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let op = self.registry.get(&request.name).ok_or_else(|| {
-            ErrorData::invalid_params(format!("unknown tool: {}", request.name), None)
-        })?;
-
         // Convert arguments to serde_json::Value
         let args = match request.arguments {
             Some(map) => serde_json::Value::Object(map),
             None => serde_json::Value::Object(serde_json::Map::new()),
         };
 
-        match op.execute_json(Arc::new(args)).await {
-            Ok(result) => {
-                // Serialize result as text content
-                let text = serde_json::to_string(&result).unwrap_or_else(|_| result.to_string());
-                Ok(CallToolResult::success(vec![ContentBlock::text(text)]).into())
-            }
-            Err(error_data) => {
-                // Return as tool-level error per doc-5 §10
-                let message = format!("{}", error_data);
-                Ok(CallToolResult::error(vec![ContentBlock::text(message)]).into())
-            }
-        }
+        self.dispatch_call_tool(&request.name, args)
+            .await
+            .map(Into::into)
     }
 
     // -- Resources --
@@ -437,5 +542,136 @@ mod tests {
         let result = handler.dispatch_read_resource("nom://bogus").await;
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("unknown resource URI"));
+    }
+
+    // ---- TASK-41: widget-display-gated `_meta.ui` on get_goal_progress ----
+
+    fn handler_with_goal_progress(db_path: std::path::PathBuf) -> McpHandler {
+        let clock = Clock { tz: chrono_tz::UTC };
+        let mut reg = OperationRegistry::new(make_clock());
+        reg.register(Arc::new(
+            crate::goal::GetGoalProgress::new(clock).with_db_path(db_path.clone()),
+        ));
+        // A second, unrelated tool proves the gate is scoped to
+        // get_goal_progress and doesn't leak onto every tool.
+        reg.register(Arc::new(TestOp));
+        McpHandler::new(Arc::new(reg), clock).with_db_path(db_path)
+    }
+
+    /// AC#4: with no `settings` row (today's default), `get_goal_progress`'s
+    /// `meta` is `None`, matching every other tool — list_tools output is
+    /// unchanged from pre-widget behavior.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_list_tools_widget_display_default_false_no_meta() {
+        let db = TempDb::new().await;
+        let handler = handler_with_goal_progress(db.path.clone());
+
+        let tools = handler.build_tools_gated().await.unwrap();
+
+        let goal_progress = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "get_goal_progress")
+            .expect("get_goal_progress should be registered");
+        assert!(goal_progress.meta.is_none());
+
+        let test_op = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "test-op")
+            .expect("test-op should be registered");
+        assert!(test_op.meta.is_none());
+    }
+
+    /// AC#1: with `widget_display_enabled = true`, `get_goal_progress`'s
+    /// tool declaration carries `_meta.ui.resourceUri` pointing at the
+    /// registered `ui://` resource — and no other tool is affected.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_list_tools_widget_display_true_adds_ui_meta_to_goal_progress_only() {
+        let db = TempDb::new().await;
+
+        let set_widget = crate::widget::SetWidgetDisplay::new().with_db_path(db.path.clone());
+        set_widget
+            .execute_json(Arc::new(serde_json::json!({ "enabled": true })))
+            .await
+            .unwrap();
+
+        let handler = handler_with_goal_progress(db.path.clone());
+        let tools = handler.build_tools_gated().await.unwrap();
+
+        let goal_progress = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "get_goal_progress")
+            .expect("get_goal_progress should be registered");
+        let meta = goal_progress.meta.as_ref().expect("meta should be set");
+        assert_eq!(
+            meta.0.get("ui").and_then(|ui| ui.get("resourceUri")),
+            Some(&serde_json::Value::String(
+                GOAL_PROGRESS_UI_RESOURCE_URI.to_string()
+            ))
+        );
+
+        // Scoped to get_goal_progress only — the other registered tool is
+        // untouched.
+        let test_op = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "test-op")
+            .expect("test-op should be registered");
+        assert!(test_op.meta.is_none());
+    }
+
+    /// AC#2: `resources/read` for the widget URI returns a valid
+    /// `text/html;profile=mcp-app` document.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_dispatch_read_resource_goal_progress_widget() {
+        let clock = Clock { tz: chrono_tz::UTC };
+        let handler = McpHandler::new(Arc::new(OperationRegistry::new(make_clock())), clock);
+
+        let result = handler
+            .dispatch_read_resource(GOAL_PROGRESS_UI_RESOURCE_URI)
+            .await;
+        assert!(result.is_ok());
+        let ReadResourceResult { contents, .. } = result.unwrap();
+        let ResourceContents::TextResourceContents { mime_type, text, .. } = &contents[0] else {
+            panic!("expected text contents")
+        };
+        assert_eq!(mime_type.as_deref(), Some("text/html;profile=mcp-app"));
+        assert!(!text.is_empty());
+        assert!(text.contains("<!DOCTYPE html>"));
+    }
+
+    /// AC#3: `call_tool("get_goal_progress")` returns byte-identical content
+    /// whether `widget_display_enabled` is true or false — the widget only
+    /// changes how a capable host *renders* the result, never the tool's own
+    /// response.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_call_tool_get_goal_progress_unchanged_by_widget_flag() {
+        let db = TempDb::new().await;
+        let handler = handler_with_goal_progress(db.path.clone());
+
+        let args = serde_json::json!({ "date": "2025-01-15" });
+
+        let result_before = handler
+            .dispatch_call_tool("get_goal_progress", args.clone())
+            .await
+            .unwrap();
+
+        let set_widget = crate::widget::SetWidgetDisplay::new().with_db_path(db.path.clone());
+        set_widget
+            .execute_json(Arc::new(serde_json::json!({ "enabled": true })))
+            .await
+            .unwrap();
+
+        let result_after = handler
+            .dispatch_call_tool("get_goal_progress", args)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            serde_json::to_string(&result_before).unwrap(),
+            serde_json::to_string(&result_after).unwrap(),
+        );
     }
 }
