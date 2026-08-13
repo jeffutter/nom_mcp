@@ -44,3 +44,9 @@ SETUP (read first): This is a Rust workspace (nom-core, nom-mcp, nom-mcp-http; n
 6. Run: nix develop -c cargo clippy --workspace --all-targets
 7. Run: nix develop -c cargo fmt -p nom-core
 <!-- SECTION:PLAN:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Extracted shared parse_logged_at(ts, clock) helper in nom-core/src/weight/mod.rs to deduplicate timestamp parsing between LogWeight and UpdateWeightEntry. Both operations now call the same function for ISO-8601 parse → format → logged_date derivation. Also removed avoidable String clones from LogWeight's INSERT query by passing borrowed references (&str) matching existing borrow style elsewhere in the file. All 15 tests pass, clippy is clean.
+<!-- SECTION:FINAL_SUMMARY:END -->
