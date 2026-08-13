@@ -18,19 +18,16 @@ jobs:
             target: aarch64-apple-darwin
             architecture: arm64
             binary-postfix: ""
-            use-cross: false
           - os: ubuntu-latest
             os-name: linux
             target: x86_64-unknown-linux-gnu
             architecture: x86_64
             binary-postfix: ""
-            use-cross: false
           - os: ubuntu-latest
             os-name: linux
             target: aarch64-unknown-linux-gnu
             architecture: arm64
             binary-postfix: ""
-            use-cross: true
 
     steps:
       - name: Checkout repository
@@ -43,25 +40,22 @@ jobs:
           profile: minimal
           override: true
       - uses: Swatinem/rust-cache@v2
-      - name: Install cross
-        if: matrix.job.use-cross
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cross
-      - name: Cargo build (native)
-        if: ${{ !matrix.job.use-cross }}
-        run: cargo build --release --target ${{ matrix.job.target }} --bins
-      - name: Cargo build (cross)
-        if: matrix.job.use-cross
-        run: cross build --release --target ${{ matrix.job.target }} --bins
-
-      - name: install strip command
-        shell: bash
+      # Cross-compiling aarch64-unknown-linux-gnu via the `cross` tool pulls a
+      # Docker image cross-rs deliberately bases on an old Ubuntu (GCC 5) for
+      # wide glibc compatibility — too old to compile modern SIMD C code that
+      # some dependencies (e.g. simsimd, pulled in by turso) require. Using
+      # the runner's own apt cross-toolchain instead gives us a current GCC
+      # with no container involved.
+      - name: Install aarch64 cross toolchain
+        if: matrix.job.target == 'aarch64-unknown-linux-gnu'
         run: |
-          if [[ ${{ matrix.job.target }} == aarch64-unknown-linux-gnu ]]; then
-              sudo apt update
-              sudo apt-get install -y binutils-aarch64-linux-gnu
-          fi
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+      - name: Cargo build
+        run: cargo build --release --target ${{ matrix.job.target }} --bins
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
       - name: Packaging final binaries
         shell: bash
         run: |
