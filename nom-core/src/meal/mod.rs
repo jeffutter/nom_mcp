@@ -1843,7 +1843,10 @@ mod tests {
         let mut rows = stmt.query((meal_id,)).await.unwrap();
         let row = rows.next().await.unwrap().unwrap();
         let count: i64 = row.get(0).unwrap();
-        assert_eq!(count, 0, "Portions table should have zero rows for cleared meal");
+        assert_eq!(
+            count, 0,
+            "Portions table should have zero rows for cleared meal"
+        );
     }
 
     #[serial_test::serial]

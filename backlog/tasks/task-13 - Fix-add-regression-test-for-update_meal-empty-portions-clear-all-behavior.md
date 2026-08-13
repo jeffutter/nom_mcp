@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@ralph'
 created_date: '2026-08-12 20:21'
-updated_date: '2026-08-13 01:02'
+updated_date: '2026-08-13 01:07'
 labels:
   - review-followup
 dependencies:
@@ -38,6 +38,12 @@ SETUP (read first): This is a Rust+WebAssembly core (crates/gql-core) with a Typ
 4. Also assert the meal's materialized totals reflect zero portions after the clear (i.e. total_calories etc. equal whatever the adjustment alone contributes, or 0.0 if no adjustment was set) -- this is the part that would silently break if totals recomputation were skipped when portions is empty.
 5. Run: nix develop -c cargo test -p nom-core -- meal::tests::test_update_meal_empty_portions_clears_all --nocapture and confirm it passes, then run the full suite: nix develop -c cargo test -p nom-core
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Fixup applied post-review: cargo fmt --all wrapped the long assert_eq! line at nom-core/src/meal/mod.rs (test_update_meal_empty_portions_clears_all) that failed 'cargo fmt --all -- --check'; no behavior change.
+<!-- SECTION:NOTES:END -->
 
 ## Final Summary
 
