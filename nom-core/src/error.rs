@@ -119,6 +119,18 @@ impl std::fmt::Display for ErrorData {
     }
 }
 
+/// Convert StorageError to ErrorData.
+/// Conflict variants (like lock probes) become ErrorData::conflict;
+/// everything else becomes storage_failure.
+impl From<crate::storage::StorageError> for ErrorData {
+    fn from(e: crate::storage::StorageError) -> Self {
+        match e {
+            crate::storage::StorageError::Conflict(reason) => Self::conflict(reason),
+            _ => Self::storage_failure(e.to_string()),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Shared render function — turns ErrorData into stderr text + exit code.
 // Used by both local-CLI and remote-CLI so output is identical.

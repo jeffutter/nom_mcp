@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn test_parse_value_floats() {
-        assert_eq!(parse_value("3.14"), serde_json::json!(3.14));
+        assert_eq!(parse_value("2.71"), serde_json::Value::from(2.71_f64));
         assert_eq!(parse_value("-0.5"), serde_json::json!(-0.5));
     }
 

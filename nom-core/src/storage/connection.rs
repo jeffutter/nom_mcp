@@ -29,9 +29,7 @@ impl Connection {
         if super::lock_probe::probe_db_lock(&db_path)
             .map_err(|e| StorageError::Io(format!("failed to probe database lock: {e}")))?
         {
-            return Err(StorageError::Database(
-                "database file is locked by another process".to_string(),
-            ));
+            return Err(StorageError::Conflict("local_db_locked".to_string()));
         }
         Self::open_at(&db_path).await
     }
@@ -144,6 +142,8 @@ pub enum StorageError {
     Io(String),
     Database(String),
     Query(String),
+    /// Another process holds the database lock.
+    Conflict(String),
 }
 
 impl std::fmt::Display for StorageError {
@@ -152,6 +152,7 @@ impl std::fmt::Display for StorageError {
             Self::Io(msg) => write!(f, "storage I/O error: {msg}"),
             Self::Database(msg) => write!(f, "storage database error: {msg}"),
             Self::Query(msg) => write!(f, "storage query error: {msg}"),
+            Self::Conflict(msg) => write!(f, "conflict: {msg}"),
         }
     }
 }
