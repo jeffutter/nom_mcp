@@ -74,3 +74,9 @@ execute_from_args() has three fallible branches after arg parsing, but existing 
 <!-- SECTION:NOTES:BEGIN -->
 Added serial_test = "3" to nom-mcp/Cargo.toml dev-dependencies. Added TestGuard struct (matching nom-core pattern) plus two #[serial_test::serial] tests: test_execute_from_args_missing_server_url (XDG_CONFIG_HOME points to nonexistent dir, AppConfig loads defaults with server_url=None) and test_execute_from_args_invalid_server_url (temp config.toml with malformed URL). Both assert Err with Validation category and field=server_url. All 7 tests pass, clippy clean, formatted.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented 2 config-validation unit tests for execute_from_args() in nom-mcp-remote.rs: (1) missing server_url returns Validation error with field 'server_url' when no config exists; (2) malformed server_url returns Validation error with field 'server_url'. Added serial_test dev-dependency matching nom-core v3. Used TestGuard pattern from nom-core for XDG_CONFIG_HOME isolation. All 7 tests pass, clippy clean, formatted.
+<!-- SECTION:FINAL_SUMMARY:END -->

@@ -7,7 +7,7 @@ status: Done
 assignee:
   - '@ralph'
 created_date: '2026-08-12 22:47'
-updated_date: '2026-08-12 22:59'
+updated_date: '2026-08-12 23:00'
 labels:
   - review-followup
   - planned
@@ -76,3 +76,9 @@ Pure refactor — zero behavioral change. All changes in nom-core/src/meal/mod.r
 - `nix develop -c cargo clippy --workspace --all-targets` — confirm clean
 - `nix develop -c cargo test -p nom-core` — confirm all 154 tests pass
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Pure refactor in nom-core/src/meal/mod.rs. Changed compute_portion_macros return type from (f64,f64,f64,f64,f64) to NutrientValues struct; updated compute_totals signature, resolve_portions, build_meal_summary, UpdateMeal adjustment-only recompute, and 5 unit tests. Removed MacroTuple type alias. Zero behavioral change — all 154 tests pass, clippy clean.
+<!-- SECTION:NOTES:END -->

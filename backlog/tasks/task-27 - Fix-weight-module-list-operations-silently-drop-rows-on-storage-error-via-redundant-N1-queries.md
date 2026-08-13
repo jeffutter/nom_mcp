@@ -3,11 +3,14 @@ id: TASK-27
 title: >-
   Fix: weight module list operations silently drop rows on storage error via
   redundant N+1 queries
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@ralph'
 created_date: '2026-08-13 02:07'
+updated_date: '2026-08-13 02:16'
 labels:
   - review-followup
+  - planned
 dependencies:
   - TASK-2.15
 priority: high
@@ -34,14 +37,46 @@ Found while reviewing TASK-2.15 (nom-core/src/weight/mod.rs). GetWeightToday (:5
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-SETUP (read first): This is a Rust workspace (nom-core, nom-mcp, nom-mcp-http; no WASM/web component in this repo). ALL commands must run inside the Nix dev shell: either run 'direnv allow' once, or prefix every command with 'nix develop -c'. Work from the repository root unless told otherwise. Do not change pinned dependency versions.
+## Implementation Plan
 
-1. In nom-core/src/weight/mod.rs, change GetWeightToday::execute_json's SQL at :542 from 'SELECT id FROM weight_entries WHERE logged_date = ? ORDER BY logged_at DESC' to 'SELECT id, logged_at, logged_date, value FROM weight_entries WHERE logged_date = ? ORDER BY logged_at DESC'.
-2. Replace the loop body at :552-564 (currently: read id, call build_weight_summary, silently drop on Err) with direct row-to-WeightEntrySummary mapping — read all four typed columns off 'row' the same way build_weight_summary itself does at :57-70, propagating each column-read error with '?' instead of swallowing it.
-3. Repeat steps 1-2 identically for GetWeightByDate (:638-660) and GetWeightByDateRange (:736-762).
-4. Decide whether build_weight_summary (:38-73) still has live callers after this change — LogWeight does not currently call it, but UpdateWeightEntry does (:342, to return the post-update summary). Keep build_weight_summary as-is for that single remaining caller; do not remove it.
-5. Add or extend tests in the mod tests block (see the companion ticket TASK-26 for the base test scaffold — if that ticket has not landed yet, add a minimal temp-db test here covering: seed 2-3 weight_entries rows, call GetWeightByDate, assert the returned array has the same length and field values as what was seeded).
-6. Run: nix develop -c cargo test -p nom-core
-7. Run: nix develop -c cargo clippy --workspace --all-targets
-8. Run: nix develop -c cargo fmt -p nom-core
+### Overview
+Eliminate the N+1 query pattern in three list operations (GetWeightToday, GetWeightByDate, GetWeightByDateRange) by selecting all four columns directly instead of fetching IDs then calling build_weight_summary per row. This simultaneously fixes two bugs: (1) silent row drops when the second query fails, and (2) unnecessary round-trips that scale linearly with result size.
+
+build_weight_summary is retained for its remaining caller (UpdateWeightEntry post-update fetch).
+
+### File Changes
+
+#### nom-core/src/weight/mod.rs
+
+**Step 1: Fix GetWeightToday (lines ~540-564)**
+- Change SQL from `SELECT id FROM weight_entries WHERE logged_date = ? ORDER BY logged_at DESC` to `SELECT id, logged_at, logged_date, value FROM weight_entries WHERE logged_date = ? ORDER BY logged_at DESC`
+- Replace the loop body that reads `id` then calls `build_weight_summary(&conn, id).await` with direct column mapping from the row:
+  
+- The `if let Ok(summary)` wrapper is eliminated — errors propagate via `?` operator
+
+**Step 2: Fix GetWeightByDate (lines ~638-660)**
+- Identical change: expand SQL to include all columns, replace ID-only loop with direct row mapping
+- Same error propagation pattern
+
+**Step 3: Fix GetWeightByDateRange (lines ~736-762)**
+- Identical change: expand SQL to include all columns, replace ID-only loop with direct row mapping
+- Same error propagation pattern
+
+**Step 4: Verify build_weight_summary retention**
+- build_weight_summary is still called by UpdateWeightEntry at line ~342 (post-update summary fetch)
+- Keep the function as-is; do not remove or modify
+
+**Step 5: Add regression test**
+- In a `#[cfg(test)] mod tests` block (note: TASK-26 covers comprehensive tests for all 6 ops; this ticket adds ONE focused regression test):
+- Test: seed 3 weight entries for the same date, call GetWeightByDate, assert returned array has exactly 3 items with matching field values
+- This guards against future regressions where silent drops could creep back in
+- Use TempDb fixture pattern from meal module tests
+
+### Verification
+1. `nix develop -c cargo test -p nom-core` — all tests pass
+2. `nix develop -c cargo clippy --workspace --all-targets` — clean
+3. `nix develop -c cargo fmt -p nom-core`
+
+### Why No Sub-Tickets
+All changes are in a single file, tightly coupled (same pattern applied to 3 functions), and total diff is under 60 lines. Splitting into sub-tickets would create coordination overhead without meaningful independent shippability.
 <!-- SECTION:PLAN:END -->
