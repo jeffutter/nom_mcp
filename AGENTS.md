@@ -28,3 +28,90 @@ You MUST read the overview resource to understand the complete workflow. The inf
 </CRITICAL_INSTRUCTION>
 
 <!-- BACKLOG.MD MCP GUIDELINES END -->
+
+## Project overview
+
+`nom_mcp` is a single-user Rust MCP server for tracking food, nutrition, and body weight — exposed identically over MCP, local CLI, HTTP, and a remote-CLI thin client. It's a Cargo workspace with two crates:
+
+- **`nom-core`** — all domain logic: entities (Food, Meal, Portion, Weight Entry, Goal), storage (turso/SQLite), external API clients (OpenFoodFacts, USDA FDC), config, and the `Operation` trait that drives every transport surface.
+- **`nom-mcp`** — thin binaries: `nom-mcp` (local CLI + MCP server + HTTP server, registers all operations) and `nom-mcp-remote` (HTTP client CLI that talks to a running `nom-mcp` server).
+
+## Commands
+
+This project uses Nix flakes for a pinned toolchain (`nix develop`). CI runs everything through `nix develop .#ci -c <cmd>`; use the same prefix locally if you don't already have a shell with the pinned Rust toolchain active.
+
+```sh
+# Build
+cargo build --workspace
+
+# Run all tests
+cargo test --all-features --workspace
+
+# Run a single test
+cargo test --workspace test_name_substring
+cargo test -p nom-core storage::migration::tests::test_migration_idempotency
+
+# Formatting (CI fails on unformatted code)
+cargo fmt --all
+cargo fmt --all --check
+
+# Lint (CI fails on any clippy warning)
+cargo clippy --all-targets --all-features --workspace -- -D warnings
+
+# Docs (CI fails on any rustdoc warning)
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --all-features --workspace --examples
+
+# Run the local MCP/CLI/HTTP server binary directly
+cargo run -p nom-mcp --bin nom-mcp -- <subcommand> key=value ...
+```
+
+The `nom-core/tests/lock_probe_integration.rs` integration test spawns the `lock_holder` helper binary (`nom-core/src/lock_holder.rs`) via `CARGO_BIN_EXE_lock_holder`; only Cargo's own integration-test harness sets that env var, so that test must stay an integration test rather than move into the lib's `#[cfg(test)]` modules.
+
+## Architecture
+
+### One `Operation`, four surfaces
+
+The entire system is built around a single abstraction in `nom-core/src/operation/mod.rs`: the `Operation` trait. Every domain action (search_food, log_meal, get_weight_by_date, ...) is a struct implementing:
+
+```rust
+trait Operation {
+    fn name(&self) -> &str;              // CLI subcommand, HTTP path segment, MCP tool name
+    fn description(&self) -> &str;
+    fn surfaces(&self) -> Surfaces;       // bitflags: CLI | HTTP | MCP (default ALL)
+    fn input_schema(&self) -> Option<serde_json::Value>;
+    async fn execute_json(&self, args: Arc<serde_json::Value>) -> Result<serde_json::Value, ErrorData>;
+}
+```
+
+A single `OperationRegistry` (`nom-core/src/operation/registry.rs`) holds `Vec<Arc<dyn Operation>>` plus the shared `Clock`. All three routers read from the *same* registry instance:
+
+- `cli_router.rs` — builds a clap `Command` tree from `Surfaces::CLI` ops; two-phase (static command tree, then raw-args-to-JSON at dispatch)
+- `http_router.rs` — builds an axum `Router` with one `POST /api/{name}` route per `Surfaces::HTTP` op
+- `mcp_handler.rs` — exposes `Surfaces::MCP` ops as MCP tools
+
+Adding an operation and registering it once (see `nom-mcp/src/main.rs`) makes it appear on every surface it declares — this is what closes CLI/HTTP/MCP drift by construction. When adding a new domain action, implement `Operation` in the relevant entity module (`food`, `meal`, `weight`) and register it in `nom-mcp/src/main.rs`; do not hand-write a separate CLI arg parser, HTTP handler, or MCP tool definition.
+
+`nom-mcp-remote` is a *separate* binary that does not use the registry at all — it POSTs directly to `/api/{operation}` on a configured remote server and renders the response through the same `cli_exit`/`render_error` functions, so its output is byte-identical to local-CLI output.
+
+### Unified error taxonomy
+
+`nom-core/src/error.rs` defines `ErrorData { category, field, reason }` as the single error currency across all four surfaces. `ErrorCategory` (NotFound/Validation/Conflict/ExternalApiFailure/StorageFailure) maps deterministically to both an HTTP status code and a CLI exit code. `render_error`/`cli_exit` are shared by local-CLI and remote-CLI so their stderr output and exit codes are identical byte-for-byte. When adding a new failure mode, extend `ErrorData`'s constructors rather than introducing a new error type — every surface depends on this single shape.
+
+### Storage: turso + advisory-lock handoff
+
+`nom-core/src/storage/` wraps `turso` (SQLite-compatible, local-file mode). Two invariants matter:
+
+1. **WAL checkpoint on close** (`connection.rs`) — every connection checkpoints the WAL before releasing, preventing data loss when handing off between local-CLI and server processes.
+2. **Advisory lock probe before open** (`lock_probe.rs`) — `Connection::open()` uses a non-blocking POSIX `fcntl(F_GETLK)` probe (the same mechanism turso uses internally) to detect whether another process already holds the DB open, and fails fast with `StorageError::Conflict("local_db_locked")` instead of risking silent WAL corruption from two writers. This is why the CLI error path has a dedicated friendly message: "server is running — stop it or use the remote-CLI instead."
+
+Migrations (`migration.rs`) follow the geni pattern: raw SQL embedded via `include_str!("schema.sql")`, tracked by SHA-256 hash in an `_migrations` table, applied atomically in a transaction. There is currently one migration (v1, the full initial schema).
+
+### Config, Clock
+
+`nom-core/src/config.rs` — `AppConfig::load()` layers hardcoded defaults < TOML file (`$XDG_CONFIG_HOME/nom_mcp/config.toml`) < env vars (`NOM_MCP_` prefix, `__` for nested keys like `NOM_MCP_remote__server_url`). Secrets (USDA API key) are wrapped in `RedactedString`, which redacts Debug/Display but still serializes normally — don't unwrap that pattern when adding new secret fields.
+
+`nom-core/src/clock.rs` — `Clock` resolves an IANA timezone once at startup (config → OS-local via `iana_time_zone` → UTC fallback) and is shared through the `OperationRegistry` so "today" is computed consistently and freshly (never cached) everywhere a logged date is materialized.
+
+### Domain language
+
+`CONTEXT.md` at the repo root is the canonical ubiquitous-language glossary (Meal, Food, Portion, Weight Entry, Goal, Direction, Weekly Summary, Widget Display) — read it before naming new types or fields, since it also lists terms to avoid (e.g. "Log Entry", "Serving" for the wrong thing, "Limit" instead of a Goal target + Direction).
