@@ -241,9 +241,14 @@ fn run_serve_http(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         let listener = tokio::net::TcpListener::bind(addr).await?;
         tracing::info!(%addr, "nom-mcp HTTP serve mode listening (REST at /api/*, MCP at /mcp)");
 
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
         axum::serve(listener, router.into_make_service())
             .with_graceful_shutdown(async move {
-                let _ = tokio::signal::ctrl_c().await;
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = sigterm.recv() => {}
+                }
                 ct.cancel();
             })
             .await?;
