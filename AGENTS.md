@@ -31,10 +31,12 @@ You MUST read the overview resource to understand the complete workflow. The inf
 
 ## Project overview
 
-`nom_mcp` is a single-user Rust MCP server for tracking food, nutrition, and body weight — exposed identically over MCP, local CLI, HTTP, and a remote-CLI thin client. It's a Cargo workspace with two crates:
+`nom_mcp` is a single-user Rust MCP server for tracking food, nutrition, and body weight — exposed identically over MCP (stdio or streamable-HTTP), local CLI, a REST HTTP API, and a remote-CLI thin client. It's a Cargo workspace with two crates:
 
 - **`nom-core`** — all domain logic: entities (Food, Meal, Portion, Weight Entry, Goal), storage (turso/SQLite), external API clients (OpenFoodFacts, USDA FDC), config, and the `Operation` trait that drives every transport surface.
-- **`nom-mcp`** — thin binaries: `nom-mcp` (local CLI + MCP server + HTTP server, registers all operations) and `nom-mcp-remote` (HTTP client CLI that talks to a running `nom-mcp` server).
+- **`nom-mcp`** — thin binaries: `nom-mcp` (local CLI, and `serve` subcommand for MCP stdio / HTTP+MCP server modes, registers all operations) and `nom-mcp-remote` (HTTP client CLI that talks to a running `nom-mcp serve http` server).
+
+**Status: v1 complete.** All operations across food/meal/weight/goal/widget tracking, both `serve` transports (stdio and HTTP), the `nom://weekly-summary` MCP resource, and `nom-mcp-remote` are implemented and tested. The v1 tracking epic (`backlog/tasks/task-2 - Build-nom_mcp-v1.md`, status: Done) is closed. Ongoing work is tracked as new Backlog.md tasks as they come up.
 
 ## Commands
 
@@ -61,8 +63,12 @@ cargo clippy --all-targets --all-features --workspace -- -D warnings
 # Docs (CI fails on any rustdoc warning)
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --all-features --workspace --examples
 
-# Run the local MCP/CLI/HTTP server binary directly
-cargo run -p nom-mcp --bin nom-mcp -- <subcommand> key=value ...
+# Run the local CLI directly
+cargo run -p nom-mcp --bin nom-mcp -- <operation> key=value ...
+
+# Run the MCP/HTTP server
+cargo run -p nom-mcp --bin nom-mcp -- serve stdio
+cargo run -p nom-mcp --bin nom-mcp -- serve http --port 8000
 ```
 
 The `nom-core/tests/lock_probe_integration.rs` integration test spawns the `lock_holder` helper binary (`nom-core/src/lock_holder.rs`) via `CARGO_BIN_EXE_lock_holder`; only Cargo's own integration-test harness sets that env var, so that test must stay an integration test rather than move into the lib's `#[cfg(test)]` modules.
@@ -89,9 +95,20 @@ A single `OperationRegistry` (`nom-core/src/operation/registry.rs`) holds `Vec<A
 - `http_router.rs` — builds an axum `Router` with one `POST /api/{name}` route per `Surfaces::HTTP` op
 - `mcp_handler.rs` — exposes `Surfaces::MCP` ops as MCP tools
 
-Adding an operation and registering it once (see `nom-mcp/src/main.rs`) makes it appear on every surface it declares — this is what closes CLI/HTTP/MCP drift by construction. When adding a new domain action, implement `Operation` in the relevant entity module (`food`, `meal`, `weight`) and register it in `nom-mcp/src/main.rs`; do not hand-write a separate CLI arg parser, HTTP handler, or MCP tool definition.
+Adding an operation and registering it once (see `build_registry()` in `nom-mcp/src/main.rs`) makes it appear on every surface it declares — this is what closes CLI/HTTP/MCP drift by construction. When adding a new domain action, implement `Operation` in the relevant entity module (`food`, `meal`, `weight`, `goal`, `widget`) and register it in `nom-mcp/src/main.rs`; do not hand-write a separate CLI arg parser, HTTP handler, or MCP tool definition. Widget display operations (`get_widget_display`, `set_widget_display`) are the one exception that restricts `surfaces()` to `Surfaces::MCP` only — they don't make sense as local-CLI or REST actions.
 
 `nom-mcp-remote` is a *separate* binary that does not use the registry at all — it POSTs directly to `/api/{operation}` on a configured remote server and renders the response through the same `cli_exit`/`render_error` functions, so its output is byte-identical to local-CLI output.
+
+### `serve`: stdio and HTTP transports
+
+`nom-mcp serve [stdio|http [--port N]]` (`nom-mcp/src/main.rs`) runs a long-lived server instead of the one-shot local-CLI dispatch; bare `serve` and `serve stdio` are equivalent, and HTTP defaults to port 8000. Both transports are built from the identical `build_serve_context()` (clock + registry construction), so they can never diverge in what operations they expose:
+
+- **stdio** — a real MCP server over stdio (`rmcp::transport::stdio()`), for MCP clients that spawn the binary directly (e.g. Claude Desktop). Blocks until the client disconnects.
+- **http** — a single axum listener exposing both the REST API (`POST /api/{operation}`, from `http_router.rs`) and a streamable-HTTP MCP endpoint at `/mcp` (from `mcp_handler.rs` via `rmcp`'s `StreamableHttpService`), so one process serves both `nom-mcp-remote` and remote MCP clients. Binds to `http_bind_address:port`, handles both SIGINT and SIGTERM for graceful shutdown.
+
+Both serve modes log to stderr (`nom_core::logging::init_server`) since stdio mode reserves stdout for the MCP JSON-RPC protocol.
+
+The MCP surface additionally exposes one read-only resource, `nom://weekly-summary` (`nom-core/src/weekly/mod.rs`), returning a rolling 7-day nutrition/weight summary computed against the active goal — resources are handled separately from tools in `mcp_handler.rs` (`list_resources`/`read_resource`).
 
 ### Unified error taxonomy
 
