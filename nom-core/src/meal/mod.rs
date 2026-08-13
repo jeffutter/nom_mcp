@@ -2060,7 +2060,7 @@ mod tests {
 
         // RE-FETCH — use GetMealsByDateRange which exercises build_meal_summary internally
         let op = GetMealsByDateRange::new().with_db_path(db.path.clone());
-        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let today = clock.today().format("%Y-%m-%d").to_string();
         let result = op
             .execute_json(Arc::new(serde_json::json!({
                 "start_date": today,
