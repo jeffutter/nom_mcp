@@ -339,8 +339,8 @@
   });
 
   sendRequest("ui/initialize", {
-    capabilities: {},
-    clientInfo: { name: "nom-mcp-goal-progress-widget", version: "1.0.0" },
+    appCapabilities: {},
+    appInfo: { name: "nom-mcp-goal-progress-widget", version: "1.0.0" },
     protocolVersion: "2026-01-26"
   }).then(function (result) {
     applyHostContext(result && result.hostContext);
