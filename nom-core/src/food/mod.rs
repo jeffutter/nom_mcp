@@ -392,19 +392,13 @@ impl Operation for SearchFood {
 
         #[cfg(test)]
         let conn = if let Some(ref path) = self.db_path {
-            Connection::open_at(path)
-                .await
-                .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?
+            Connection::open_at(path).await?
         } else {
-            Connection::open()
-                .await
-                .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?
+            Connection::open().await?
         };
 
         #[cfg(not(test))]
-        let conn = Connection::open()
-            .await
-            .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?;
+        let conn = Connection::open().await?;
 
         let candidates = if is_barcode(&req.query) {
             // Barcode path: OpenFoodFacts only
@@ -655,19 +649,13 @@ impl Operation for CreateCustomFood {
 
         #[cfg(test)]
         let conn = if let Some(ref path) = self.db_path {
-            Connection::open_at(path)
-                .await
-                .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?
+            Connection::open_at(path).await?
         } else {
-            Connection::open()
-                .await
-                .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?
+            Connection::open().await?
         };
 
         #[cfg(not(test))]
-        let conn = Connection::open()
-            .await
-            .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?;
+        let conn = Connection::open().await?;
 
         // Convert per-serving nutrients to per-100g
         // Unit is already validated as gram-based above

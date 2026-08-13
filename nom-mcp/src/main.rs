@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use nom_core::cli::parse_params;
 use nom_core::client::{off::OffClient, usda::FdcClient};
 use nom_core::clock::Clock;
 use nom_core::config::AppConfig;
@@ -67,7 +68,7 @@ pub fn execute_from_args(args: &[String]) -> Result<serde_json::Value, ErrorData
     }
 
     let op_name = &args[1];
-    let op_args = serde_json::json!({}); // TODO: parse args[2..] into JSON
+    let op_args = parse_params(&args[2..])?;
 
     let Some(op) = registry.get(op_name) else {
         return Err(ErrorData::not_found());

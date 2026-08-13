@@ -17,6 +17,7 @@
 //! - `config` — configuration loading (TOML + env)
 //! - `error` — unified ErrorData taxonomy
 
+pub mod cli;
 pub mod client;
 pub mod clock;
 pub mod config;

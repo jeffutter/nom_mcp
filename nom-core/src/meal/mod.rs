@@ -152,10 +152,7 @@ fn compute_portion_macros(
 }
 
 /// Compute materialized totals from portions + optional adjustment.
-fn compute_totals(
-    portions: &[NutrientValues],
-    adjustment: Option<&Adjustment>,
-) -> MealTotals {
+fn compute_totals(portions: &[NutrientValues], adjustment: Option<&Adjustment>) -> MealTotals {
     let mut totals = MealTotals {
         total_calories: 0.0,
         total_protein_g: 0.0,
@@ -670,19 +667,13 @@ impl Operation for LogMeal {
 
         #[cfg(test)]
         let conn = if let Some(ref path) = self.db_path {
-            Connection::open_at(path)
-                .await
-                .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?
+            Connection::open_at(path).await?
         } else {
-            Connection::open()
-                .await
-                .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?
+            Connection::open().await?
         };
 
         #[cfg(not(test))]
-        let conn = Connection::open()
-            .await
-            .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?;
+        let conn = Connection::open().await?;
 
         // Determine logged_at and logged_date
         let (logged_at_str, logged_date_str) = if let Some(ref ts) = req.logged_at {
@@ -830,19 +821,13 @@ impl Operation for UpdateMeal {
 
         #[cfg(test)]
         let conn = if let Some(ref path) = self.db_path {
-            Connection::open_at(path)
-                .await
-                .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?
+            Connection::open_at(path).await?
         } else {
-            Connection::open()
-                .await
-                .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?
+            Connection::open().await?
         };
 
         #[cfg(not(test))]
-        let conn = Connection::open()
-            .await
-            .map_err(|e| ErrorData::storage_failure(format!("failed to open database: {e}")))?;
+        let conn = Connection::open().await?;
 
         // Verify meal exists
         {
@@ -1569,8 +1554,20 @@ mod tests {
     #[test]
     fn test_compute_totals_basic() {
         let portions = vec![
-            NutrientValues { calories: 100.0, protein_g: 10.0, carbs_g: 15.0, fat_g: 5.0, fiber_g: 2.0 },
-            NutrientValues { calories: 200.0, protein_g: 20.0, carbs_g: 30.0, fat_g: 10.0, fiber_g: 4.0 },
+            NutrientValues {
+                calories: 100.0,
+                protein_g: 10.0,
+                carbs_g: 15.0,
+                fat_g: 5.0,
+                fiber_g: 2.0,
+            },
+            NutrientValues {
+                calories: 200.0,
+                protein_g: 20.0,
+                carbs_g: 30.0,
+                fat_g: 10.0,
+                fiber_g: 4.0,
+            },
         ];
         let totals = compute_totals(&portions, None);
         assert_eq!(totals.total_calories, 300.0);
@@ -1582,7 +1579,13 @@ mod tests {
 
     #[test]
     fn test_compute_totals_with_adjustment() {
-        let portions = vec![NutrientValues { calories: 100.0, protein_g: 10.0, carbs_g: 15.0, fat_g: 5.0, fiber_g: 2.0 }];
+        let portions = vec![NutrientValues {
+            calories: 100.0,
+            protein_g: 10.0,
+            carbs_g: 15.0,
+            fat_g: 5.0,
+            fiber_g: 2.0,
+        }];
         let adj = Adjustment {
             calories: Some(-50.0),
             protein_g: None,
