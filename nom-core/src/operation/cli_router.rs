@@ -35,10 +35,13 @@ pub fn parse_and_dispatch(
     args: &[String],
 ) -> Result<(Arc<dyn Operation>, Arc<serde_json::Value>), crate::error::ErrorData> {
     let cmd = build_cli_command(registry);
+    // `-h`/`--help` (and any genuine usage error) get clap's own formatted
+    // output and exit code via `e.exit()` rather than being wrapped in
+    // ErrorData, which would mangle the help text with an error prefix.
     let matches = cmd
         .clone()
         .try_get_matches_from(args)
-        .map_err(|e| crate::error::ErrorData::validation("arguments", e.to_string()))?;
+        .unwrap_or_else(|e| e.exit());
 
     // Extract subcommand name
     let subcommand_name = matches
