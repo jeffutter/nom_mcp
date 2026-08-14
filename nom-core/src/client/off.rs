@@ -27,7 +27,10 @@ pub struct OffResponse {
 pub struct Product {
     #[serde(default)]
     pub product_name: Option<String>,
-    #[serde(default)]
+    /// OFF returns this as a number for some products and a free-text string
+    /// (e.g. `"250g"`, `"1 bar (40g)"`) for others; leading digits are parsed
+    /// out of the string form.
+    #[serde(default, deserialize_with = "de_serving_size")]
     pub serving_size: Option<f64>,
     /// Indicates whether primary values are "per 100g" or "per serving".
     #[serde(default)]
@@ -60,6 +63,34 @@ pub struct Nutriments {
     pub fiber: Option<f64>,
     #[serde(rename = "fiber_100g", default)]
     pub fiber_100g: Option<f64>,
+}
+
+/// Accepts `serving_size` as either a number or a free-text string, parsing
+/// the leading numeric prefix out of the string form (e.g. `"250g"` -> `250.0`).
+/// Unparseable strings become `None` rather than failing the whole response.
+fn de_serving_size<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Number(f64),
+        Text(String),
+    }
+
+    Ok(Option::<Raw>::deserialize(deserializer)?.and_then(|raw| match raw {
+        Raw::Number(n) => Some(n),
+        Raw::Text(s) => parse_leading_number(&s),
+    }))
+}
+
+fn parse_leading_number(s: &str) -> Option<f64> {
+    let trimmed = s.trim();
+    let end = trimmed
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(trimmed.len());
+    trimmed[..end].parse().ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -235,6 +266,38 @@ mod tests {
         assert_eq!(n.carbohydrates_100g, Some(40.0));
         assert_eq!(n.fat_100g, Some(8.0));
         assert_eq!(n.fiber_100g, Some(5.0));
+    }
+
+    #[test]
+    fn test_deserialize_serving_size_as_string() {
+        // Real OFF responses sometimes return serving_size as free text
+        // (e.g. "250g") instead of a bare number.
+        let json = r#"{
+            "code": "0611269991000",
+            "status": 1,
+            "product": {
+                "product_name": "Energy Drink",
+                "serving_size": "250g"
+            }
+        }"#;
+        let resp: OffResponse = serde_json::from_str(json).unwrap();
+        let product = resp.product.unwrap();
+        assert_eq!(product.serving_size, Some(250.0));
+    }
+
+    #[test]
+    fn test_deserialize_serving_size_unparseable_string_is_none() {
+        let json = r#"{
+            "code": "0611269991000",
+            "status": 1,
+            "product": {
+                "product_name": "Mystery Product",
+                "serving_size": "one bar"
+            }
+        }"#;
+        let resp: OffResponse = serde_json::from_str(json).unwrap();
+        let product = resp.product.unwrap();
+        assert_eq!(product.serving_size, None);
     }
 
     #[test]
