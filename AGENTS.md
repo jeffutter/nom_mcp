@@ -46,12 +46,13 @@ This project uses Nix flakes for a pinned toolchain (`nix develop`). CI runs eve
 # Build
 cargo build --workspace
 
-# Run all tests
-cargo test --all-features --workspace
+# Run all tests (matches CI — nextest doesn't run doctests, so pair it with `cargo test --doc`)
+cargo nextest run --all-features --workspace
+cargo test --doc --all-features --workspace
 
 # Run a single test
-cargo test --workspace test_name_substring
-cargo test -p nom-core storage::migration::tests::test_migration_idempotency
+cargo nextest run --workspace test_name_substring
+cargo nextest run -p nom-core storage::migration::tests::test_migration_idempotency
 
 # Formatting (CI fails on unformatted code)
 cargo fmt --all

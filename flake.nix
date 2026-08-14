@@ -107,6 +107,7 @@
           ci = mkShell (
             {
               packages = [
+                cargo-nextest
                 clang
                 rustToolchain
               ]
