@@ -10,7 +10,7 @@ async-trait = "0.1.92"
 axum = "0.8.9"
 bitflags = { version = "2.13.1", features = ["serde"] }
 clap = "4.6.6"
-config = "0.15"
+config = { version = "0.15", default-features = false, features = ["toml"] }
 http = "1"
 rmcp = { version = "3.1.2", features = ["server", "client"] }
 schemars = "1.2.2"
@@ -24,8 +24,7 @@ tokio = { version = "1", features = [
   "rt-multi-thread",
   "sync",
 ] }
-tower-http = "0.7.0"
-turso = "0.8.0-pre.4"
+turso = { version = "0.8.0-pre.4", default-features = false }
 url = "2"
 reqwest = { version = "0.13", default-features = false, features = [
   "json",
