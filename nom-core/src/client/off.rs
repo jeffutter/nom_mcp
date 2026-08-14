@@ -79,10 +79,12 @@ where
         Text(String),
     }
 
-    Ok(Option::<Raw>::deserialize(deserializer)?.and_then(|raw| match raw {
-        Raw::Number(n) => Some(n),
-        Raw::Text(s) => parse_leading_number(&s),
-    }))
+    Ok(
+        Option::<Raw>::deserialize(deserializer)?.and_then(|raw| match raw {
+            Raw::Number(n) => Some(n),
+            Raw::Text(s) => parse_leading_number(&s),
+        }),
+    )
 }
 
 fn parse_leading_number(s: &str) -> Option<f64> {
