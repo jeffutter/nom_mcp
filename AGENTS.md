@@ -42,6 +42,8 @@ You MUST read the overview resource to understand the complete workflow. The inf
 
 This project uses Nix flakes for a pinned toolchain (`nix develop`). CI runs everything through `nix develop .#ci -c <cmd>`; use the same prefix locally if you don't already have a shell with the pinned Rust toolchain active.
 
+Git hooks are managed by [lefthook](https://github.com/evilmartians/lefthook) (`lefthook.yml`): pre-commit runs `cargo fmt`/`clippy` on staged files (fmt auto-fixes and re-stages), pre-push mirrors CI in full (fmt check, clippy, nextest, doctests, docs, audit). Run `lefthook install` once after cloning (it's on `PATH` in the `default` dev shell) to wire them up.
+
 ```sh
 # Build
 cargo build --workspace

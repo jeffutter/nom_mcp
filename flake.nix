@@ -96,6 +96,7 @@
                 cargo-release
                 cargo-watch
                 clang
+                lefthook
                 rust-analyzer
                 rustToolchain
               ];
