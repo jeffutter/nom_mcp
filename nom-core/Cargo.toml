@@ -3,6 +3,7 @@ name = "nom-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish = false
 
 [dependencies]
 async-trait = "0.1.92"

@@ -6,3 +6,17 @@ resolver = "2"
 edition = "2024"
 rust-version = "1.88"
 version = "0.3.3"
+
+# `cargo release patch` (dry-run) / `cargo release patch --execute` — bumps
+# the shared workspace version, commits, tags, and pushes in one command.
+# Neither crate is published to crates.io, so publishing is disabled;
+# `tag-message = ""` produces a lightweight tag, matching the tags this repo
+# already has (`v0.3.2` etc.) and the `[v]?X.Y.Z` pattern the CD workflow
+# (.github/workflows/cd.yml) matches on push.
+[workspace.metadata.release]
+shared-version = true
+consolidate-commits = true
+publish = false
+tag-name = "v{{version}}"
+tag-message = ""
+pre-release-commit-message = "Bump version to {{version}}"

@@ -93,6 +93,7 @@
               packages = [
                 cargo-audit
                 cargo-nextest
+                cargo-release
                 cargo-watch
                 clang
                 rust-analyzer
