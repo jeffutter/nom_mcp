@@ -59,6 +59,12 @@
           commonArgs // { pname = "nom-mcp-workspace"; inherit version; }
         );
 
+        # doCheck is off for both packages: CI's `test` job already runs the full
+        # suite via `cargo nextest` on every push. Re-running it inside crane's
+        # checkPhase is redundant, and for nom-mcp-remote it's actively broken —
+        # reqwest's rustls backend inits a TLS connector (via rustls-platform-verifier,
+        # OS trust store) eagerly on Client::builder().build(), even for plain-HTTP
+        # requests, and Nix's build sandbox doesn't reliably expose a cert store.
         nom-mcp = craneLib.buildPackage (
           commonArgs
           // {
@@ -66,6 +72,7 @@
             pname = "nom-mcp";
             inherit version;
             cargoExtraArgs = "--bin nom-mcp";
+            doCheck = false;
           }
         );
 
@@ -76,6 +83,7 @@
             pname = "nom-mcp-remote";
             inherit version;
             cargoExtraArgs = "--bin nom-mcp-remote";
+            doCheck = false;
           }
         );
       in
