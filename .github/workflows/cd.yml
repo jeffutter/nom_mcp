@@ -74,3 +74,17 @@ jobs:
             target/${{ matrix.job.target }}/release/nom-mcp-*.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify-homelab:
+    name: Notify homelab
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch dependency-release event
+        env:
+          GH_TOKEN: ${{ secrets.HOMELAB_DISPATCH_TOKEN }}
+        run: |
+          gh api repos/jeffutter/homelab/dispatches \
+            -f event_type=dependency-release \
+            -F client_payload[app]=nom-mcp \
+            -F client_payload[tag]="${{ github.ref_name }}"
