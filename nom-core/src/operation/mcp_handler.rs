@@ -39,6 +39,16 @@ const GOAL_PROGRESS_UI_RESOURCE_URI: &str = "ui://nom-mcp/goal-progress";
 /// else (`connect-src 'none'`, `script-src 'self' 'unsafe-inline'`).
 const GOAL_PROGRESS_WIDGET_HTML: &str = include_str!("../../assets/goal_progress_widget.html");
 
+/// URI of the MCP Apps UI resource for `get_weekly_progress`'s widget.
+///
+/// Not listed in `build_resources()`/`list_resources()`, same rationale as
+/// [`GOAL_PROGRESS_UI_RESOURCE_URI`].
+const WEEKLY_PROGRESS_UI_RESOURCE_URI: &str = "ui://nom-mcp/weekly-progress";
+
+/// Static widget HTML served for [`WEEKLY_PROGRESS_UI_RESOURCE_URI`].
+/// Same self-contained-HTML rationale as [`GOAL_PROGRESS_WIDGET_HTML`].
+const WEEKLY_PROGRESS_WIDGET_HTML: &str = include_str!("../../assets/weekly_progress_widget.html");
+
 /// Cache TTLs (SEP-2549: `ReadResourceResult`/`ListToolsResult`/
 /// `ListResourcesResult` all carry a required `ttlMs`/`cacheScope` pair once
 /// a client negotiates a protocol version that mandates them — omitting them
@@ -63,10 +73,21 @@ const WEEKLY_SUMMARY_TTL_MS: u64 = 60_000; // 1 minute
 /// [`GOAL_PROGRESS_UI_RESOURCE_URI`], per the MCP Apps extension
 /// (SEP-1865 / modelcontextprotocol/ext-apps spec 2026-01-26).
 fn goal_progress_ui_meta() -> rmcp::model::MetaObject {
+    ui_meta(GOAL_PROGRESS_UI_RESOURCE_URI)
+}
+
+/// Build the `_meta.ui` object that points a Tool declaration at
+/// [`WEEKLY_PROGRESS_UI_RESOURCE_URI`], per the MCP Apps extension
+/// (SEP-1865 / modelcontextprotocol/ext-apps spec 2026-01-26).
+fn weekly_progress_ui_meta() -> rmcp::model::MetaObject {
+    ui_meta(WEEKLY_PROGRESS_UI_RESOURCE_URI)
+}
+
+fn ui_meta(resource_uri: &str) -> rmcp::model::MetaObject {
     let mut ui = serde_json::Map::new();
     ui.insert(
         "resourceUri".to_string(),
-        serde_json::Value::String(GOAL_PROGRESS_UI_RESOURCE_URI.to_string()),
+        serde_json::Value::String(resource_uri.to_string()),
     );
     let mut meta = serde_json::Map::new();
     meta.insert("ui".to_string(), serde_json::Value::Object(ui));
@@ -122,8 +143,9 @@ impl McpHandler {
             .collect()
     }
 
-    /// Build the tool list, additionally gating `get_goal_progress`'s MCP
-    /// Apps `_meta.ui` pointer on the widget-display setting (TASK-41).
+    /// Build the tool list, additionally gating `get_goal_progress`'s and
+    /// `get_weekly_progress`'s MCP Apps `_meta.ui` pointers on the shared
+    /// widget-display setting (TASK-41).
     ///
     /// Kept as a plain inherent method (mirroring `build_tools`/
     /// `dispatch_read_resource`) so tests can call it directly without
@@ -166,12 +188,14 @@ impl McpHandler {
             }
         };
 
-        if widget_display_enabled
-            && let Some(tool) = tools
-                .iter_mut()
-                .find(|t| t.name.as_ref() == "get_goal_progress")
-        {
-            tool.meta = Some(goal_progress_ui_meta());
+        if widget_display_enabled {
+            for tool in tools.iter_mut() {
+                match tool.name.as_ref() {
+                    "get_goal_progress" => tool.meta = Some(goal_progress_ui_meta()),
+                    "get_weekly_progress" => tool.meta = Some(weekly_progress_ui_meta()),
+                    _ => {}
+                }
+            }
         }
 
         tools
@@ -261,6 +285,18 @@ impl McpHandler {
                     uri: uri.to_string(),
                     mime_type: Some("text/html;profile=mcp-app".to_string()),
                     text: GOAL_PROGRESS_WIDGET_HTML.to_string(),
+                    meta: None,
+                };
+                Ok(ReadResourceResult::new(vec![contents])
+                    .with_ttl_ms(WIDGET_HTML_TTL_MS)
+                    .with_cache_scope(CacheScope::Public))
+            }
+            WEEKLY_PROGRESS_UI_RESOURCE_URI => {
+                // Same static-shell rationale as GOAL_PROGRESS_UI_RESOURCE_URI above.
+                let contents = ResourceContents::TextResourceContents {
+                    uri: uri.to_string(),
+                    mime_type: Some("text/html;profile=mcp-app".to_string()),
+                    text: WEEKLY_PROGRESS_WIDGET_HTML.to_string(),
                     meta: None,
                 };
                 Ok(ReadResourceResult::new(vec![contents])
@@ -583,7 +619,8 @@ mod tests {
         assert!(result.unwrap_err().message.contains("unknown resource URI"));
     }
 
-    // ---- TASK-41: widget-display-gated `_meta.ui` on get_goal_progress ----
+    // ---- TASK-41: widget-display-gated `_meta.ui` on get_goal_progress
+    // and get_weekly_progress ----
 
     fn handler_with_goal_progress(db_path: std::path::PathBuf) -> McpHandler {
         let clock = Clock { tz: chrono_tz::UTC };
@@ -591,15 +628,18 @@ mod tests {
         reg.register(Arc::new(
             crate::goal::GetGoalProgress::new(clock).with_db_path(db_path.clone()),
         ));
-        // A second, unrelated tool proves the gate is scoped to
-        // get_goal_progress and doesn't leak onto every tool.
+        reg.register(Arc::new(
+            crate::weekly::GetWeeklyProgress::new(clock).with_db_path(db_path.clone()),
+        ));
+        // A third, unrelated tool proves the gate is scoped to the two
+        // widget-backed tools and doesn't leak onto every tool.
         reg.register(Arc::new(TestOp));
         McpHandler::new(Arc::new(reg), clock).with_db_path(db_path)
     }
 
-    /// AC#4: with no `settings` row (today's default), `get_goal_progress`'s
-    /// `meta` is `None`, matching every other tool — list_tools output is
-    /// unchanged from pre-widget behavior.
+    /// AC#4: with no `settings` row (today's default), both widget-backed
+    /// tools' `meta` is `None`, matching every other tool — list_tools
+    /// output is unchanged from pre-widget behavior.
     #[serial_test::serial]
     #[tokio::test]
     async fn test_list_tools_widget_display_default_false_no_meta() {
@@ -608,11 +648,13 @@ mod tests {
 
         let tools = handler.build_tools_gated().await;
 
-        let goal_progress = tools
-            .iter()
-            .find(|t| t.name.as_ref() == "get_goal_progress")
-            .expect("get_goal_progress should be registered");
-        assert!(goal_progress.meta.is_none());
+        for name in ["get_goal_progress", "get_weekly_progress"] {
+            let tool = tools
+                .iter()
+                .find(|t| t.name.as_ref() == name)
+                .unwrap_or_else(|| panic!("{name} should be registered"));
+            assert!(tool.meta.is_none());
+        }
 
         let test_op = tools
             .iter()
@@ -621,12 +663,13 @@ mod tests {
         assert!(test_op.meta.is_none());
     }
 
-    /// AC#1: with `widget_display_enabled = true`, `get_goal_progress`'s
-    /// tool declaration carries `_meta.ui.resourceUri` pointing at the
-    /// registered `ui://` resource — and no other tool is affected.
+    /// AC#1: with `widget_display_enabled = true`, both `get_goal_progress`
+    /// and `get_weekly_progress` tool declarations carry `_meta.ui.resourceUri`
+    /// pointing at their respective registered `ui://` resources — and no
+    /// other tool is affected.
     #[serial_test::serial]
     #[tokio::test]
-    async fn test_list_tools_widget_display_true_adds_ui_meta_to_goal_progress_only() {
+    async fn test_list_tools_widget_display_true_adds_ui_meta_to_widget_tools_only() {
         let db = TempDb::new().await;
 
         let set_widget = crate::widget::SetWidgetDisplay::new().with_db_path(db.path.clone());
@@ -638,20 +681,23 @@ mod tests {
         let handler = handler_with_goal_progress(db.path.clone());
         let tools = handler.build_tools_gated().await;
 
-        let goal_progress = tools
-            .iter()
-            .find(|t| t.name.as_ref() == "get_goal_progress")
-            .expect("get_goal_progress should be registered");
-        let meta = goal_progress.meta.as_ref().expect("meta should be set");
-        assert_eq!(
-            meta.0.get("ui").and_then(|ui| ui.get("resourceUri")),
-            Some(&serde_json::Value::String(
-                GOAL_PROGRESS_UI_RESOURCE_URI.to_string()
-            ))
-        );
+        for (name, uri) in [
+            ("get_goal_progress", GOAL_PROGRESS_UI_RESOURCE_URI),
+            ("get_weekly_progress", WEEKLY_PROGRESS_UI_RESOURCE_URI),
+        ] {
+            let tool = tools
+                .iter()
+                .find(|t| t.name.as_ref() == name)
+                .unwrap_or_else(|| panic!("{name} should be registered"));
+            let meta = tool.meta.as_ref().expect("meta should be set");
+            assert_eq!(
+                meta.0.get("ui").and_then(|ui| ui.get("resourceUri")),
+                Some(&serde_json::Value::String(uri.to_string()))
+            );
+        }
 
-        // Scoped to get_goal_progress only — the other registered tool is
-        // untouched.
+        // Scoped to the two widget-backed tools only — the other registered
+        // tool is untouched.
         let test_op = tools
             .iter()
             .find(|t| t.name.as_ref() == "test-op")
@@ -703,6 +749,30 @@ mod tests {
 
         let result = handler
             .dispatch_read_resource(GOAL_PROGRESS_UI_RESOURCE_URI)
+            .await;
+        assert!(result.is_ok());
+        let ReadResourceResult { contents, .. } = result.unwrap();
+        let ResourceContents::TextResourceContents {
+            mime_type, text, ..
+        } = &contents[0]
+        else {
+            panic!("expected text contents")
+        };
+        assert_eq!(mime_type.as_deref(), Some("text/html;profile=mcp-app"));
+        assert!(!text.is_empty());
+        assert!(text.contains("<!DOCTYPE html>"));
+    }
+
+    /// Same as `test_dispatch_read_resource_goal_progress_widget` above, but
+    /// for the weekly-progress widget's `ui://` resource.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_dispatch_read_resource_weekly_progress_widget() {
+        let clock = Clock { tz: chrono_tz::UTC };
+        let handler = McpHandler::new(Arc::new(OperationRegistry::new(make_clock())), clock);
+
+        let result = handler
+            .dispatch_read_resource(WEEKLY_PROGRESS_UI_RESOURCE_URI)
             .await;
         assert!(result.is_ok());
         let ReadResourceResult { contents, .. } = result.unwrap();

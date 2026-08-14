@@ -14,6 +14,7 @@ use nom_core::food::{CreateCustomFood, SearchFood};
 use nom_core::goal::{GetGoalProgress, SetNutritionGoals};
 use nom_core::meal::{DeleteMeal, GetMealsByDateRange, LogMeal, SearchMeals, UpdateMeal};
 use nom_core::operation::{OperationRegistry, cli_router};
+use nom_core::weekly::GetWeeklyProgress;
 use nom_core::weight::{
     DeleteWeightEntry, GetWeightByDate, GetWeightByDateRange, GetWeightToday, LogWeight,
     UpdateWeightEntry,
@@ -111,6 +112,9 @@ fn build_registry(
     // Register widget display operations (MCP-only)
     registry.register(Arc::new(GetWidgetDisplay::new()));
     registry.register(Arc::new(SetWidgetDisplay::new()));
+
+    // Register weekly progress operation (MCP-only)
+    registry.register(Arc::new(GetWeeklyProgress::new(*clock)));
 
     registry
 }

@@ -1,15 +1,21 @@
 //! Weekly Summary — rolling 7-day nutrition and weight overview.
 //!
-//! Provides `fetch_weekly_summary()` for the MCP resource `nom://weekly-summary`.
-//! Computes daily averages against active goals and tracks weight trends.
+//! Provides `fetch_weekly_summary()`, shared by the MCP resource
+//! `nom://weekly-summary` and the `get_weekly_progress` tool (the latter
+//! exists because MCP Apps widgets bind to a `call_tool` result, not a
+//! resource read — see `crate::operation::mcp_handler`).
 
-use serde::Serialize;
+use std::sync::Arc;
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::clock::Clock;
 use crate::error::ErrorData;
 use crate::goal::{
     Direction, NutrientProgress, ProgressStatus, nutrient_progress, weight_progress,
 };
+use crate::operation::{Operation, Surfaces};
 use crate::storage::Connection;
 
 // ---------------------------------------------------------------------------
@@ -182,6 +188,76 @@ pub async fn fetch_weekly_summary(
             status,
         },
     })
+}
+
+// ---------------------------------------------------------------------------
+// GetWeeklyProgress Operation
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct GetWeeklyProgressRequest {}
+
+/// MCP-only tool wrapping `fetch_weekly_summary`, so the weekly-progress
+/// widget has a `call_tool` result to bind to (see module docs).
+pub struct GetWeeklyProgress {
+    clock: Clock,
+    #[cfg(test)]
+    db_path: Option<std::path::PathBuf>,
+}
+
+impl GetWeeklyProgress {
+    pub fn new(clock: Clock) -> Self {
+        Self {
+            clock,
+            #[cfg(test)]
+            db_path: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_db_path(mut self, path: std::path::PathBuf) -> Self {
+        self.db_path = Some(path);
+        self
+    }
+}
+
+#[async_trait::async_trait]
+impl Operation for GetWeeklyProgress {
+    fn name(&self) -> &str {
+        "get_weekly_progress"
+    }
+
+    fn description(&self) -> &str {
+        "Get the rolling 7-day nutrition and weight progress summary (same window as the nom://weekly-summary resource)."
+    }
+
+    fn surfaces(&self) -> Surfaces {
+        Surfaces::MCP
+    }
+
+    fn input_schema(&self) -> Option<serde_json::Value> {
+        serde_json::to_value(schemars::schema_for!(GetWeeklyProgressRequest)).ok()
+    }
+
+    async fn execute_json(
+        &self,
+        _args: Arc<serde_json::Value>,
+    ) -> Result<serde_json::Value, ErrorData> {
+        #[cfg(test)]
+        let conn = if let Some(ref path) = self.db_path {
+            Connection::open_at(path).await?
+        } else {
+            Connection::open().await?
+        };
+
+        #[cfg(not(test))]
+        let conn = Connection::open().await?;
+
+        let summary = fetch_weekly_summary(&conn, &self.clock).await?;
+
+        serde_json::to_value(summary)
+            .map_err(|e| ErrorData::storage_failure(format!("serialization failed: {e}")))
+    }
 }
 
 /// Calculate the start date of the rolling 7-day window (6 days before end_date).
@@ -669,5 +745,62 @@ mod tests {
                 assert_eq!(summary.weight.status, Some(ProgressStatus::Over));
             }
         }
+    }
+
+    // ---- GetWeeklyProgress tests ----
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_weekly_progress_empty_db() {
+        let db = TempDb::new().await;
+        let op = GetWeeklyProgress::new(clock()).with_db_path(db.path.clone());
+
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({})))
+            .await
+            .unwrap();
+
+        assert!(!result["start_date"].as_str().unwrap().is_empty());
+        assert!(!result["end_date"].as_str().unwrap().is_empty());
+        assert_eq!(result["days_with_data"].as_u64().unwrap(), 0);
+        assert_eq!(
+            result["nutrients"]["calories"]["consumed"]
+                .as_f64()
+                .unwrap(),
+            0.0
+        );
+        assert!(result["weight"]["latest_known_weight"].is_null());
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_weekly_progress_matches_fetch_weekly_summary() {
+        let db = TempDb::new().await;
+        let clock = clock();
+        let today = Clock::format_date(clock.today());
+
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        seed_goal(&conn, "2025-01-01", 2000.0, "target").await;
+        seed_meal(&conn, &today, 1500.0, 100.0, 200.0, 50.0, 30.0).await;
+        drop(conn);
+
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        let summary = fetch_weekly_summary(&conn, &clock).await.unwrap();
+        drop(conn);
+
+        let op = GetWeeklyProgress::new(clock).with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({})))
+            .await
+            .unwrap();
+
+        assert_eq!(result, serde_json::to_value(&summary).unwrap());
+        let today_total = result["nutrients"]["daily_totals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["date"] == today)
+            .expect("today's totals present");
+        assert_eq!(today_total["calories"].as_f64().unwrap(), 1500.0);
     }
 }

@@ -29,9 +29,9 @@ Whether one of a Goal's nutrient targets is an exact aim, a floor to reach, or a
 _Avoid_: Type, mode
 
 **Weekly Summary**:
-The MCP Resource surfacing a rolling 7-day nutrition and weight snapshot: daily-average nutrient consumption vs Goal targets (plus a per-day breakdown) alongside a weight trend (start/end/delta within the window, or the latest known Weight Entry if none was logged this week). MCP-only — no CLI/HTTP equivalent, since it has no Operation shape.
+A rolling 7-day nutrition and weight snapshot: daily-average nutrient consumption vs Goal targets (plus a per-day breakdown) alongside a weight trend (start/end/delta within the window, or the latest known Weight Entry if none was logged this week). Computed by the shared `fetch_weekly_summary()` and surfaced two ways: the read-only MCP Resource `nom://weekly-summary` (no CLI/HTTP equivalent, since it has no Operation shape), and the `get_weekly_progress` MCP tool — the latter exists solely so the weekly-progress widget has a `call_tool` result to bind to, since MCP Apps widgets can't get live data from a resource read.
 _Avoid_: Weekly Report, Dashboard
 
 **Widget Display**:
-A single global on/off user preference, settable only via MCP (no CLI/HTTP equivalent), that governs whether an MCP client renders visual widgets instead of plain text/JSON. Persisted in its own settings storage, separate from startup Config. `get_goal_progress` is the first real consumer: when enabled, its `list_tools` declaration carries a `_meta.ui.resourceUri` pointing at a `ui://` MCP Apps widget resource (per SEP-1865 / modelcontextprotocol/ext-apps); `call_tool` output itself never changes. (`TASK-41`)
+A single global on/off user preference, settable only via MCP (no CLI/HTTP equivalent), that governs whether an MCP client renders visual widgets instead of plain text/JSON. Persisted in its own settings storage, separate from startup Config. `get_goal_progress` was the first consumer; `get_weekly_progress` is the second: when enabled, each tool's `list_tools` declaration carries a `_meta.ui.resourceUri` pointing at its own `ui://` MCP Apps widget resource (per SEP-1865 / modelcontextprotocol/ext-apps); `call_tool` output itself never changes. (`TASK-41`)
 _Avoid_: Widget Toggle (names the action of flipping it, not the preference itself)
