@@ -5,7 +5,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 rust-version = "1.88"
-version = "0.3.12"
+version = "0.3.13"
 
 # `cargo release patch` (dry-run) / `cargo release patch --execute` — bumps
 # the shared workspace version, commits, tags, and pushes in one command.

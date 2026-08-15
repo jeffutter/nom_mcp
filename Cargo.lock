@@ -1745,7 +1745,7 @@ dependencies = [
 
 [[package]]
 name = "nom-core"
-version = "0.3.12"
+version = "0.3.13"
 dependencies = [
  "async-trait",
  "axum",
@@ -1776,7 +1776,7 @@ dependencies = [
 
 [[package]]
 name = "nom-mcp"
-version = "0.3.12"
+version = "0.3.13"
 dependencies = [
  "axum",
  "nom-core",
