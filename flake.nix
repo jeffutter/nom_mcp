@@ -59,33 +59,38 @@
           commonArgs // { pname = "nom-mcp-workspace"; inherit version; }
         );
 
-        # doCheck is off for both packages: CI's `test` job already runs the full
-        # suite via `cargo nextest` on every push. Re-running it inside crane's
+        # doCheck is off: CI's `test` job already runs the full suite via
+        # `cargo nextest` on every push. Re-running it inside crane's
         # checkPhase is redundant, and for nom-mcp-remote it's actively broken —
         # reqwest's rustls backend inits a TLS connector (via rustls-platform-verifier,
         # OS trust store) eagerly on Client::builder().build(), even for plain-HTTP
         # requests, and Nix's build sandbox doesn't reliably expose a cert store.
-        nom-mcp = craneLib.buildPackage (
+        #
+        # nom-mcp and nom-mcp-remote are both `[[bin]]` targets of the same
+        # nom-mcp crate, so they share their entire dependency graph — including
+        # the nom-core path dependency, which cargoArtifacts doesn't cache since
+        # it's a local, not a third-party, crate. Building with one `--bins`
+        # invocation compiles that shared graph once instead of twice; the two
+        # packages below just copy their matching binary out of that build.
+        workspaceBins = craneLib.buildPackage (
           commonArgs
           // {
-            inherit cargoArtifacts;
-            pname = "nom-mcp";
-            inherit version;
-            cargoExtraArgs = "--bin nom-mcp";
+            inherit cargoArtifacts version;
+            pname = "nom-mcp-workspace";
+            cargoExtraArgs = "--bins";
             doCheck = false;
           }
         );
 
-        nom-mcp-remote = craneLib.buildPackage (
-          commonArgs
-          // {
-            inherit cargoArtifacts;
-            pname = "nom-mcp-remote";
-            inherit version;
-            cargoExtraArgs = "--bin nom-mcp-remote";
-            doCheck = false;
-          }
-        );
+        mkBinPackage =
+          binName:
+          pkgs.runCommand "${binName}-${version}" { } ''
+            mkdir -p $out/bin
+            cp ${workspaceBins}/bin/${binName} $out/bin/
+          '';
+
+        nom-mcp = mkBinPackage "nom-mcp";
+        nom-mcp-remote = mkBinPackage "nom-mcp-remote";
       in
       with pkgs;
       {

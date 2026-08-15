@@ -6,8 +6,13 @@ on:
       - "[v]?[0-9]+.[0-9]+.[0-9]+"
 
 jobs:
-  publish:
-    name: Publishing for ${{ matrix.job.os }}
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build for ${{ matrix.job.os }}
+    needs: ci
     runs-on: ${{ matrix.job.os }}
     strategy:
       matrix:
@@ -55,6 +60,28 @@ jobs:
             shasum -a 256 $RELEASE_NAME.tar.gz > $RELEASE_NAME.sha256
           done
 
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.job.os-name }}-${{ matrix.job.architecture }}
+          path: |
+            target/${{ matrix.job.target }}/release/nom-mcp-*.tar.gz
+            target/${{ matrix.job.target }}/release/nom-mcp-*.sha256
+          retention-days: 1
+
+  nix-check:
+    name: Nix build for ${{ matrix.job.os }}
+    needs: ci
+    runs-on: ${{ matrix.job.os }}
+    strategy:
+      matrix:
+        job:
+          - os: macos-latest
+          - os: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
       - uses: cachix/install-nix-action@v31
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
@@ -66,18 +93,30 @@ jobs:
       - run: nix build .#nom-mcp-remote --accept-flake-config --option log-lines 200
       - run: nix flake check --accept-flake-config
 
+  release:
+    name: Publish release
+    needs: [build, nix-check]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+
       - name: Releasing assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            target/${{ matrix.job.target }}/release/nom-mcp-*.tar.gz
-            target/${{ matrix.job.target }}/release/nom-mcp-*.sha256
+            dist/*.tar.gz
+            dist/*.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   notify-homelab:
     name: Notify homelab
-    needs: publish
+    needs: release
     runs-on: ubuntu-latest
     steps:
       - name: Dispatch dependency-release event
