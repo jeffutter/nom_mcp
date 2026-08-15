@@ -55,8 +55,13 @@
           }
           // envVars
         );
+        # version is deliberately NOT the crate version here: buildDepsOnly's
+        # output only depends on Cargo.lock, but Nix hashes a derivation's
+        # name (pname-version) into its store path, so tying this to the
+        # crate's release version would invalidate the deps cache on every
+        # release even when no dependency actually changed.
         cargoArtifacts = craneLib.buildDepsOnly (
-          commonArgs // { pname = "nom-mcp-workspace"; inherit version; }
+          commonArgs // { pname = "nom-mcp-workspace"; version = "deps"; }
         );
 
         # doCheck is off: CI's `test` job already runs the full suite via
