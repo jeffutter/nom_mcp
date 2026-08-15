@@ -14,9 +14,9 @@ use rmcp::{
     handler::server::ServerHandler,
     model::{
         CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
-        ErrorCode, Implementation, InitializeResult, ListResourcesResult, ListToolsResult,
-        PaginatedRequestParams, ProtocolVersion, ReadResourceResponse, ReadResourceResult,
-        Resource, ResourceContents, ServerCapabilities, Tool,
+        ErrorCode, ExtensionCapabilities, Implementation, InitializeResult, ListResourcesResult,
+        ListToolsResult, PaginatedRequestParams, ProtocolVersion, ReadResourceResponse,
+        ReadResourceResult, Resource, ResourceContents, ServerCapabilities, Tool,
     },
     service::RequestContext,
 };
@@ -32,6 +32,15 @@ use crate::storage::Connection;
 /// `_meta.ui.resourceUri` (see `goal_progress_ui_meta`), not the general
 /// resource listing.
 const GOAL_PROGRESS_UI_RESOURCE_URI: &str = "ui://nom-mcp/goal-progress";
+
+/// MCP Apps extension identifier (SEP-1865 / SEP-1724 extension mechanism),
+/// declared in `InitializeResult.capabilities.extensions` so clients can
+/// tell this server actually implements the extension before bothering to
+/// call `tools/list` and look for the per-tool `_meta.ui` pointers below —
+/// declaring `_meta.ui` alone, without this top-level capability, left
+/// clients that check for it first (observed: Claude iOS) initializing the
+/// session and then never issuing a follow-up request at all.
+const UI_EXTENSION_ID: &str = "io.modelcontextprotocol/ui";
 
 /// Static widget HTML served for [`GOAL_PROGRESS_UI_RESOURCE_URI`].
 ///
@@ -368,9 +377,19 @@ impl ServerHandler for McpHandler {
     // -- Info --
 
     fn get_info(&self) -> InitializeResult {
+        let mut extensions = ExtensionCapabilities::new();
+        extensions.insert(
+            UI_EXTENSION_ID.to_string(),
+            serde_json::from_value(serde_json::json!({
+                "mimeTypes": ["text/html;profile=mcp-app"]
+            }))
+            .expect("literal extension-capability object always deserializes"),
+        );
+
         let capabilities = ServerCapabilities::builder()
             .enable_tools()
             .enable_resources()
+            .enable_extensions_with(extensions)
             .build();
         InitializeResult::new(capabilities)
             .with_server_info(Implementation::new("nom-mcp", env!("CARGO_PKG_VERSION")))
@@ -551,6 +570,25 @@ mod tests {
             Some("test-op".to_string())
         );
         assert!(handler.get_tool("nonexistent").is_none());
+    }
+
+    /// AC: `initialize`'s `capabilities.extensions` must declare
+    /// [`UI_EXTENSION_ID`] — omitting it left clients that gate on the
+    /// top-level capability (rather than discovering `_meta.ui` per-tool)
+    /// abandoning the session right after `initialize`.
+    #[test]
+    fn test_get_info_declares_ui_extension_capability() {
+        let reg = OperationRegistry::new(make_clock());
+        let clock = Clock { tz: chrono_tz::UTC };
+        let handler = McpHandler::new(Arc::new(reg), clock);
+
+        let info = handler.get_info();
+
+        let extensions = info
+            .capabilities
+            .extensions
+            .expect("server capabilities must declare an extensions map");
+        assert!(extensions.contains_key(UI_EXTENSION_ID));
     }
 
     /// AC: negotiating `initialize` against the MCP Apps Final date
