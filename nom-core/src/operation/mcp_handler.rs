@@ -7,16 +7,14 @@
 
 use std::sync::Arc;
 
-use std::borrow::Cow;
-
 use rmcp::{
     ErrorData, RoleServer,
     handler::server::ServerHandler,
     model::{
         CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
         ErrorCode, ExtensionCapabilities, Implementation, InitializeResult, ListResourcesResult,
-        ListToolsResult, PaginatedRequestParams, ProtocolVersion, ReadResourceResponse,
-        ReadResourceResult, Resource, ResourceContents, ServerCapabilities, Tool,
+        ListToolsResult, PaginatedRequestParams, ReadResourceResponse, ReadResourceResult,
+        Resource, ResourceContents, ServerCapabilities, Tool,
     },
     service::RequestContext,
 };
@@ -79,21 +77,6 @@ const WEEKLY_PROGRESS_WIDGET_HTML: &str = include_str!("../../assets/weekly_prog
 const LISTING_TTL_MS: u64 = 300_000; // 5 minutes
 const WIDGET_HTML_TTL_MS: u64 = 86_400_000; // 24 hours
 const WEEKLY_SUMMARY_TTL_MS: u64 = 60_000; // 1 minute
-
-/// Protocol version string for the date MCP Apps (SEP-1865) went Final.
-///
-/// Absent from rmcp's `ProtocolVersion::KNOWN_VERSIONS`, which jumps straight
-/// from `2025-11-25` to `2026-07-28` — so without advertising it explicitly
-/// via `supported_protocol_versions` below, `initialize` negotiation
-/// downgrades any client that requests it to `2025-11-25`, a version that
-/// predates MCP Apps existing at all. nom-mcp's tool/resource output never
-/// branches on the negotiated protocol version and already implements the
-/// MCP Apps shape this date represents, so accepting the client's requested
-/// version here instead of downgrading it is safe.
-fn mcp_apps_final_protocol_version() -> ProtocolVersion {
-    serde_json::from_value(serde_json::Value::String("2026-01-26".to_string()))
-        .expect("literal protocol version string always deserializes")
-}
 
 /// Build the `_meta.ui` object that points a Tool declaration at
 /// [`GOAL_PROGRESS_UI_RESOURCE_URI`], per the MCP Apps extension
@@ -395,15 +378,6 @@ impl ServerHandler for McpHandler {
             .with_server_info(Implementation::new("nom-mcp", env!("CARGO_PKG_VERSION")))
     }
 
-    /// Widen negotiation beyond rmcp's built-in `KNOWN_VERSIONS` to include
-    /// [`mcp_apps_final_protocol_version`] — see that function's doc comment
-    /// for why.
-    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
-        let mut versions = ProtocolVersion::KNOWN_VERSIONS.to_vec();
-        versions.push(mcp_apps_final_protocol_version());
-        Cow::Owned(versions)
-    }
-
     // -- Tools --
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
@@ -589,24 +563,6 @@ mod tests {
             .extensions
             .expect("server capabilities must declare an extensions map");
         assert!(extensions.contains_key(UI_EXTENSION_ID));
-    }
-
-    /// AC: negotiating `initialize` against the MCP Apps Final date
-    /// (2026-01-26, not in rmcp's own `KNOWN_VERSIONS`) must echo it back
-    /// rather than downgrading to `2025-11-25`, per
-    /// `mcp_apps_final_protocol_version`'s doc comment.
-    #[test]
-    fn test_supported_protocol_versions_includes_mcp_apps_final_date() {
-        let reg = OperationRegistry::new(make_clock());
-        let clock = Clock { tz: chrono_tz::UTC };
-        let handler = McpHandler::new(Arc::new(reg), clock);
-
-        let supported = handler.supported_protocol_versions();
-
-        assert!(supported.contains(&mcp_apps_final_protocol_version()));
-        for known in ProtocolVersion::KNOWN_VERSIONS {
-            assert!(supported.contains(known));
-        }
     }
 
     #[test]
