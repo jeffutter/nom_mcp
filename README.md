@@ -61,7 +61,7 @@ Arguments are `key=value` pairs; values are auto-typed (bare numbers become JSON
 | `get_weight_by_date date=<date>` | Weight entries on a specific date. |
 | `get_weight_by_date_range start=<date> end=<date>` | Weight entries within an inclusive date range. |
 | `set_nutrition_goals calories=<n> calories_direction=<target\|minimum\|maximum> ...` | Set or update nutrition/weight goals. Partial patch: only provided nutrients change; others carry forward from the current active goal. `*_direction` is required the first time a nutrient is set. Supports `calories`, `protein_g`, `carbs_g`, `fat_g`, `fiber_g` (each with a `*_direction`), and `target_weight` (no direction). |
-| `get_goal_progress date=<date>` | Per-nutrient consumed-vs-target and weight-vs-target comparison for a date (defaults to today). |
+| `get_goal_progress date=<date>` | Per-nutrient consumed-vs-target and weight-vs-target comparison for a date (defaults to today), plus the day's Fasting Window (`fasting_hours`, derived from the gap between that day's last Meal and the next Meal). |
 
 Two additional operations, `get_widget_display` and `set_widget_display`, exist for a future widget UI and are exposed on the **MCP surface only** (not local CLI or REST) — see [AGENTS.md](AGENTS.md#one-operation-four-surfaces).
 
@@ -113,7 +113,7 @@ For a client that speaks streamable-HTTP MCP, start `nom-mcp serve http --port 8
 
 ### MCP resource: weekly summary
 
-Besides its tools, the MCP surface exposes one resource, `nom://weekly-summary`, which returns a rolling 7-day nutrition and weight overview (daily totals, averages vs. the active goal, and weight trend) as JSON.
+Besides its tools, the MCP surface exposes one resource, `nom://weekly-summary`, which returns a rolling 7-day nutrition and weight overview (daily totals, averages vs. the active goal, weight trend, and average Fasting Window) as JSON.
 
 ### REST API
 

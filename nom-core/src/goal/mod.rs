@@ -70,6 +70,11 @@ struct GoalProgress {
     fiber_g: NutrientProgress,
     /// Weight progress (no percent field).
     weight: WeightProgress,
+    /// Fasting Window for the query date (fractional hours), derived from
+    /// Meals — see `crate::fasting`. Omitted when the date has no Meals or
+    /// no Meal exists after it.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "fasting_hours")]
+    fasting_hours: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -699,6 +704,12 @@ impl Operation for GetGoalProgress {
         // Fetch latest weight as-of query date
         let latest_weight = fetch_latest_weight(&conn, &query_date).await?;
 
+        // Fetch the Fasting Window for the query date (last Meal of the day
+        // -> next Meal on any later day); None when undefined.
+        let fasting_windows =
+            crate::fasting::fetch_fasting_windows(&conn, &query_date, &query_date).await?;
+        let fasting_hours = fasting_windows.first().map(|w| w.hours);
+
         // Parse directions from goal
         let parse_direction = |s: Option<&String>| -> Option<Direction> {
             s.and_then(|d| match d.as_str() {
@@ -761,6 +772,7 @@ impl Operation for GetGoalProgress {
             fat_g: fat_g_progress,
             fiber_g: fiber_g_progress,
             weight: weight_progress,
+            fasting_hours,
         })
         .map_err(|e| ErrorData::storage_failure(format!("serialization failed: {e}")))?)
     }
@@ -1400,5 +1412,108 @@ mod tests {
             .unwrap();
 
         assert_eq!(result["date"].as_str().unwrap(), "2025-01-15");
+    }
+
+    // ---- GetGoalProgress: fasting_hours (TASK-47) ----
+
+    async fn seed_meal_at(conn: &Connection, logged_at: &str, logged_date: &str) {
+        conn.execute(
+            "INSERT INTO meals (logged_at, logged_date, total_calories) VALUES (?, ?, ?)",
+            (logged_at, logged_date, 100.0),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_goal_progress_fasting_hours_present() {
+        let db = TempDb::new().await;
+        let clock = clock();
+
+        // Last meal Jan 10 at 23:00Z; next meal Jan 11 at 07:00Z -> 8h fast.
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        seed_meal_at(&conn, "2025-01-10T12:00:00Z", "2025-01-10").await;
+        seed_meal_at(&conn, "2025-01-10T23:00:00Z", "2025-01-10").await;
+        seed_meal_at(&conn, "2025-01-11T07:00:00Z", "2025-01-11").await;
+        drop(conn);
+
+        let op = GetGoalProgress::new(clock).with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "date": "2025-01-10"
+            })))
+            .await
+            .unwrap();
+
+        assert!((result["fasting_hours"].as_f64().unwrap() - 8.0).abs() < f64::EPSILON);
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_goal_progress_fasting_hours_omitted_without_meals_on_day() {
+        let db = TempDb::new().await;
+        let clock = clock();
+
+        // Meals exist, but not on the queried day.
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        seed_meal_at(&conn, "2025-01-11T07:00:00Z", "2025-01-11").await;
+        drop(conn);
+
+        let op = GetGoalProgress::new(clock).with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "date": "2025-01-10"
+            })))
+            .await
+            .unwrap();
+
+        assert!(result.get("fasting_hours").is_none());
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_goal_progress_fasting_hours_omitted_when_no_later_meal() {
+        let db = TempDb::new().await;
+        let clock = clock();
+
+        // Meal on the queried day, but nothing after it — fast still open.
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        seed_meal_at(&conn, "2025-01-10T20:00:00Z", "2025-01-10").await;
+        drop(conn);
+
+        let op = GetGoalProgress::new(clock).with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "date": "2025-01-10"
+            })))
+            .await
+            .unwrap();
+
+        assert!(result.get("fasting_hours").is_none());
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_goal_progress_fasting_hours_multi_day_skip() {
+        let db = TempDb::new().await;
+        let clock = clock();
+
+        // Last meal Jan 10 at 20:00Z; Jan 11 empty; first meal Jan 12 at 08:00Z
+        // -> 36h fast reported for Jan 10.
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        seed_meal_at(&conn, "2025-01-10T20:00:00Z", "2025-01-10").await;
+        seed_meal_at(&conn, "2025-01-12T08:00:00Z", "2025-01-12").await;
+        drop(conn);
+
+        let op = GetGoalProgress::new(clock).with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "date": "2025-01-10"
+            })))
+            .await
+            .unwrap();
+
+        assert!((result["fasting_hours"].as_f64().unwrap() - 36.0).abs() < f64::EPSILON);
     }
 }

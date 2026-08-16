@@ -22,6 +22,7 @@ pub mod client;
 pub mod clock;
 pub mod config;
 pub mod error;
+pub mod fasting;
 pub mod food;
 pub mod goal;
 pub mod logging;

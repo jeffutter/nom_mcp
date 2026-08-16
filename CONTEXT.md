@@ -28,6 +28,10 @@ _Avoid_: Limit (ambiguous on its own — Direction says whether a target is a ce
 Whether one of a Goal's nutrient targets is an exact aim, a floor to reach, or a ceiling not to exceed. Set explicitly the first time a nutrient is targeted; never inferred or defaulted, since nothing about a bare number says whether hitting it or staying under it is the win.
 _Avoid_: Type, mode
 
+**Fasting Window**:
+An automatically derived intermittent-fasting measure: the time from a day's last logged Meal to the next logged Meal (the earliest Meal on any later day). If the following calendar day has no Meals, the window extends to the first Meal on the next day that has one. A day's window is incomplete — and unreported — when that day has no Meals or no Meal exists after it. Nothing is stored or manually logged; it is computed from Meal timestamps. Reported per-day by `get_goal_progress` (`fasting_hours`) and as a weekly average in the Weekly Summary.
+_Avoid_: Fast Timer, IF Streak
+
 **Weekly Summary**:
 A rolling 7-day nutrition and weight snapshot: daily-average nutrient consumption vs Goal targets (plus a per-day breakdown) alongside a weight trend (start/end/delta within the window, or the latest known Weight Entry if none was logged this week). Computed by the shared `fetch_weekly_summary()` and surfaced two ways: the read-only MCP Resource `nom://weekly-summary` (no CLI/HTTP equivalent, since it has no Operation shape), and the `get_weekly_progress` MCP tool — the latter exists solely so the weekly-progress widget has a `call_tool` result to bind to, since MCP Apps widgets can't get live data from a resource read.
 _Avoid_: Weekly Report, Dashboard

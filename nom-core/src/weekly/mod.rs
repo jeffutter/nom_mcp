@@ -35,6 +35,8 @@ pub struct WeeklySummary {
     nutrients: NutrientsSummary,
     /// Weight trend for the window.
     weight: WeightSummary,
+    /// Fasting Window statistics for the window.
+    fasting: FastingSummary,
 }
 
 /// Per-nutrient daily average vs target, plus per-day breakdown.
@@ -80,6 +82,17 @@ pub struct WeightSummary {
     remaining: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<ProgressStatus>,
+}
+
+/// Fasting Window summary for the rolling window (see `crate::fasting`).
+#[derive(Debug, Clone, Serialize)]
+pub struct FastingSummary {
+    /// Average fasting duration in fractional hours, across the window days
+    /// with a completed window. Absent when no window completed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    average_hours: Option<f64>,
+    /// Number of window days with a completed fasting window.
+    days_with_fasting: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +168,16 @@ pub async fn fetch_weekly_summary(
     let weight_entries_in_window = fetch_weight_entries_in_range(conn, &start_date, &today).await?;
     let latest_known_weight = fetch_latest_known_weight(conn, &today).await?;
 
+    // 5. Fasting windows for each day in the window; average over the days
+    // that produced a completed window.
+    let fasting_windows = crate::fasting::fetch_fasting_windows(conn, &start_date, &today).await?;
+    let days_with_fasting = fasting_windows.len() as u32;
+    let average_hours = if fasting_windows.is_empty() {
+        None
+    } else {
+        Some(fasting_windows.iter().map(|w| w.hours).sum::<f64>() / days_with_fasting as f64)
+    };
+
     let start_weight = weight_entries_in_window.first().copied();
     let end_weight = weight_entries_in_window.last().copied();
     let delta = match (start_weight, end_weight) {
@@ -186,6 +209,10 @@ pub async fn fetch_weekly_summary(
             target_weight: goal_target_weight,
             remaining,
             status,
+        },
+        fasting: FastingSummary {
+            average_hours,
+            days_with_fasting,
         },
     })
 }
@@ -802,5 +829,55 @@ mod tests {
             .find(|d| d["date"] == today)
             .expect("today's totals present");
         assert_eq!(today_total["calories"].as_f64().unwrap(), 1500.0);
+    }
+
+    // ---- Fasting section (TASK-47) ----
+
+    async fn seed_meal_at(conn: &Connection, logged_at: &str, logged_date: &str) {
+        conn.execute(
+            "INSERT INTO meals (logged_at, logged_date, total_calories) VALUES (?, ?, ?)",
+            (logged_at, logged_date, 100.0),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_fetch_weekly_summary_fasting_average() {
+        let db = TempDb::new().await;
+        let clock = clock();
+        let today = clock.today();
+        let today_str = Clock::format_date(today);
+        let yesterday = Clock::format_date(today - chrono::Days::new(1));
+        let tomorrow = Clock::format_date(today + chrono::Days::new(1));
+
+        // Yesterday: last meal 23:00Z -> today's first meal 07:00Z = 8h.
+        // Today: single meal 07:00Z -> tomorrow's first meal 09:00Z = 26h.
+        // Average over the two completed windows: (8 + 26) / 2 = 17h.
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        seed_meal_at(&conn, &format!("{yesterday}T23:00:00Z"), &yesterday).await;
+        seed_meal_at(&conn, &format!("{today_str}T07:00:00Z"), &today_str).await;
+        seed_meal_at(&conn, &format!("{tomorrow}T09:00:00Z"), &tomorrow).await;
+        drop(conn);
+
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        let summary = fetch_weekly_summary(&conn, &clock).await.unwrap();
+
+        assert_eq!(summary.fasting.days_with_fasting, 2);
+        assert!((summary.fasting.average_hours.unwrap() - 17.0).abs() < f64::EPSILON);
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_fetch_weekly_summary_fasting_zero_completed_windows() {
+        let db = TempDb::new().await;
+        let clock = clock();
+        let conn = Connection::open_at(&db.path).await.unwrap();
+
+        let summary = fetch_weekly_summary(&conn, &clock).await.unwrap();
+
+        assert_eq!(summary.fasting.days_with_fasting, 0);
+        assert!(summary.fasting.average_hours.is_none());
     }
 }
