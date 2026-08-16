@@ -270,11 +270,14 @@ fn resolve_bind_addr(bind_address: &str, port: u16) -> std::io::Result<SocketAdd
 /// request stream is visible alongside the identity logs from
 /// `on_initialized`. Also extracts the JSON-RPC method name(s) from POST
 /// bodies so each line shows which MCP call arrived (`tools/list`,
-/// `resources/read`, `tools/call:<tool>`, ...) plus the peer address and
-/// X-Forwarded-For, so traffic from different clients/relays can be told
-/// apart by origin (XFF matters because nginx + mcp-auth-proxy sit in
-/// front, making the direct peer only the previous hop). Remove once the
-/// investigation is done.
+/// `resources/read`, `tools/call:<tool>`, ...) plus the peer address,
+/// X-Forwarded-For, and the 2026-07-28 transport headers (`Mcp-Method`,
+/// `Mcp-Name`). Response bodies of POSTs are buffered (≤1 MiB) and any
+/// JSON-RPC `error` objects in them are logged — this makes failures that
+/// rmcp rejects *before* they reach the `McpHandler` (e.g. missing inline
+/// `_meta` or `Mcp-Method`/`Mcp-Name` headers) visible next to the request
+/// line. Temporary debug behavior: an unbufferable POST response yields a
+/// 502 instead of a dropped body. Remove once the investigation is done.
 async fn debug_log_mcp_request(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     mut req: axum::extract::Request,
@@ -307,6 +310,17 @@ async fn debug_log_mcp_request(
             "x-forwarded-for",
         ))
         .cloned();
+    // 2026-07-28 transport headers: required for stateless (inline-
+    // lifecycle) requests; their presence/absence distinguishes clients
+    // that speak the new transport contract from those that don't.
+    let mcp_method_hdr = req
+        .headers()
+        .get(axum::http::header::HeaderName::from_static("mcp-method"))
+        .cloned();
+    let mcp_name_hdr = req
+        .headers()
+        .get(axum::http::header::HeaderName::from_static("mcp-name"))
+        .cloned();
 
     let jsonrpc_methods = if http_method == axum::http::Method::POST {
         let (parts, body) = req.into_parts();
@@ -324,6 +338,8 @@ async fn debug_log_mcp_request(
                     ?x_forwarded_for,
                     ?mcp_session_id,
                     ?mcp_protocol_version,
+                    ?mcp_method_hdr,
+                    ?mcp_name_hdr,
                     "MCP HTTP request (body unreadable, not forwarded: {error})"
                 );
                 return (axum::http::StatusCode::PAYLOAD_TOO_LARGE,).into_response();
@@ -340,10 +356,82 @@ async fn debug_log_mcp_request(
         path = %req.uri().path(),
         ?mcp_session_id,
         ?mcp_protocol_version,
+        ?mcp_method_hdr,
+        ?mcp_name_hdr,
         ?jsonrpc_methods,
         "MCP HTTP request"
     );
-    next.run(req).await
+    let mut response = next.run(req).await;
+
+    // Inspect the response so rejections that never reach the McpHandler
+    // (rmcp-level transport validation) show up beside the request line.
+    if http_method == axum::http::Method::POST {
+        let status = response.status();
+        let (parts, body) = response.into_parts();
+        match axum::body::to_bytes(body, 1_048_576).await {
+            Ok(bytes) => {
+                let jsonrpc_errors = extract_jsonrpc_errors(&bytes);
+                tracing::debug!(
+                    peer = %peer,
+                    ?x_forwarded_for,
+                    ?mcp_session_id,
+                    ?mcp_protocol_version,
+                    ?jsonrpc_methods,
+                    status = %status,
+                    ?jsonrpc_errors,
+                    "MCP HTTP response"
+                );
+                response = axum::http::Response::from_parts(parts, axum::body::Body::from(bytes));
+            }
+            Err(error) => {
+                tracing::warn!(
+                    peer = %peer,
+                    ?x_forwarded_for,
+                    ?mcp_session_id,
+                    ?mcp_protocol_version,
+                    "MCP HTTP response (body unbufferable, returning 502: {error})"
+                );
+                return (axum::http::StatusCode::BAD_GATEWAY,).into_response();
+            }
+        }
+    }
+    response
+}
+
+/// Extract JSON-RPC `error` objects (code + message) from a response body,
+/// which may be a plain JSON document or an SSE stream (`data:` lines).
+/// `None` when the response carries no errors.
+fn extract_jsonrpc_errors(body: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(body);
+    let mut errors = Vec::new();
+    for line in text.lines() {
+        let candidate = line
+            .strip_prefix("data:")
+            .map(str::trim)
+            .unwrap_or_else(|| line.trim());
+        if candidate.is_empty() || !candidate.starts_with('{') {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(candidate) else {
+            continue;
+        };
+        if let Some(err) = value.get("error") {
+            let code = err
+                .get("code")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(-1);
+            let message = err
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("?");
+            errors.push(format!("{code}: {message}"));
+        }
+    }
+    if errors.is_empty() {
+        None
+    } else {
+        Some(errors.join("; "))
+    }
 }
 
 /// Extract short descriptions of the JSON-RPC messages in a streamable-HTTP
