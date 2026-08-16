@@ -270,9 +270,11 @@ fn resolve_bind_addr(bind_address: &str, port: u16) -> std::io::Result<SocketAdd
 /// request stream is visible alongside the identity logs from
 /// `on_initialized`. Also extracts the JSON-RPC method name(s) from POST
 /// bodies so each line shows which MCP call arrived (`tools/list`,
-/// `resources/read`, `tools/call:<tool>`, ...) plus the peer address, so
-/// traffic from different clients/relays can be told apart by origin.
-/// Remove once the investigation is done.
+/// `resources/read`, `tools/call:<tool>`, ...) plus the peer address and
+/// X-Forwarded-For, so traffic from different clients/relays can be told
+/// apart by origin (XFF matters because nginx + mcp-auth-proxy sit in
+/// front, making the direct peer only the previous hop). Remove once the
+/// investigation is done.
 async fn debug_log_mcp_request(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     mut req: axum::extract::Request,
@@ -296,6 +298,15 @@ async fn debug_log_mcp_request(
             "mcp-protocol-version",
         ))
         .cloned();
+    // Behind nginx + mcp-auth-proxy, `peer` is only the previous hop;
+    // X-Forwarded-For carries the original client address(es) when the
+    // proxy chain preserves it.
+    let x_forwarded_for = req
+        .headers()
+        .get(axum::http::header::HeaderName::from_static(
+            "x-forwarded-for",
+        ))
+        .cloned();
 
     let jsonrpc_methods = if http_method == axum::http::Method::POST {
         let (parts, body) = req.into_parts();
@@ -310,6 +321,7 @@ async fn debug_log_mcp_request(
                 // rather than forwarding a consumed body.
                 tracing::debug!(
                     peer = %peer,
+                    ?x_forwarded_for,
                     ?mcp_session_id,
                     ?mcp_protocol_version,
                     "MCP HTTP request (body unreadable, not forwarded: {error})"
@@ -323,6 +335,7 @@ async fn debug_log_mcp_request(
 
     tracing::debug!(
         peer = %peer,
+        ?x_forwarded_for,
         method = %http_method,
         path = %req.uri().path(),
         ?mcp_session_id,
