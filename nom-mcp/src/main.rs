@@ -260,6 +260,28 @@ fn resolve_bind_addr(bind_address: &str, port: u16) -> std::io::Result<SocketAdd
         })
 }
 
+/// TEMPORARY debug logging (investigating widget gating since 81d32ff):
+/// log every HTTP request hitting the `/mcp` endpoint — including ones rmcp
+/// rejects before they reach the `McpHandler` (e.g. Claude iOS's bogus
+/// `MCP-Protocol-Version: 2026-01-26` header) — so the full per-session
+/// request stream is visible alongside the identity logs from
+/// `on_initialized`. Remove once the investigation is done.
+async fn debug_log_mcp_request(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if req.uri().path().starts_with("/mcp") {
+        tracing::debug!(
+            method = %req.method(),
+            path = %req.uri().path(),
+            mcp_session_id = ?req.headers().get(axum::http::header::HeaderName::from_static("mcp-session-id")),
+            mcp_protocol_version = ?req.headers().get(axum::http::header::HeaderName::from_static("mcp-protocol-version")),
+            "MCP HTTP request"
+        );
+    }
+    next.run(req).await
+}
+
 /// Run nom-mcp as an HTTP server exposing both the REST API (`/api/*`) and a
 /// streamable-HTTP MCP endpoint (`/mcp`) on a single listener, sharing the
 /// same registry/clock construction path as the stdio serve mode. Logs go to
@@ -287,7 +309,8 @@ fn run_serve_http(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         );
 
         let router = nom_core::operation::http_router::build_http_router(registry)
-            .nest_service("/mcp", mcp_service);
+            .nest_service("/mcp", mcp_service)
+            .layer(axum::middleware::from_fn(debug_log_mcp_request));
 
         let addr = resolve_bind_addr(&bind_address, port)?;
         let listener = tokio::net::TcpListener::bind(addr).await?;

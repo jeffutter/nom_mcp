@@ -16,7 +16,7 @@ use rmcp::{
         ListToolsResult, PaginatedRequestParams, ReadResourceResponse, ReadResourceResult,
         Resource, ResourceContents, ServerCapabilities, Tool,
     },
-    service::RequestContext,
+    service::{NotificationContext, RequestContext},
 };
 
 use super::{Operation, OperationRegistry, Surfaces};
@@ -397,6 +397,24 @@ impl ServerHandler for McpHandler {
             .with_server_info(Implementation::new("nom-mcp", env!("CARGO_PKG_VERSION")))
     }
 
+    /// TEMPORARY debug logging (investigating widget gating since 81d32ff):
+    /// log the exact `clientInfo` each platform reports at MCP handshake,
+    /// so we can compare what Claude iOS vs desktop/web actually send against
+    /// the [`CLAUDE_IOS_CLIENT_NAME`] assumption baked into
+    /// `build_tools_gated`. Remove once client identities are confirmed.
+    async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
+        match context.peer.peer_info() {
+            Some(info) => tracing::debug!(
+                client_name = %info.client_info.name,
+                client_version = %info.client_info.version,
+                client_title = ?info.client_info.title,
+                negotiated_protocol_version = %info.protocol_version,
+                "MCP client initialized (identity)"
+            ),
+            None => tracing::debug!("MCP client initialized (no peer info yet)"),
+        }
+    }
+
     // -- Tools --
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
@@ -412,15 +430,21 @@ impl ServerHandler for McpHandler {
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let client_name = context.client_info().map(|info| info.name);
-        Ok(
-            ListToolsResult::with_all_items(self.build_tools_gated(client_name.as_deref()).await)
-                .with_ttl_ms(LISTING_TTL_MS)
-                // Private, not Public: output now varies by requesting client
-                // (CLAUDE_IOS_CLIENT_NAME never gets _meta.ui), so a cached response
-                // must not be replayed to a different client than the one it was
-                // computed for.
-                .with_cache_scope(CacheScope::Private),
-        )
+        let tools = self.build_tools_gated(client_name.as_deref()).await;
+        // TEMPORARY debug logging (investigating widget gating since 81d32ff):
+        // correlates the requesting identity with what it actually sees.
+        tracing::debug!(
+            ?client_name,
+            ui_meta_tool_count = tools.iter().filter(|t| t.meta.is_some()).count(),
+            "tools/list: widget gating decision"
+        );
+        Ok(ListToolsResult::with_all_items(tools)
+            .with_ttl_ms(LISTING_TTL_MS)
+            // Private, not Public: output now varies by requesting client
+            // (CLAUDE_IOS_CLIENT_NAME never gets _meta.ui), so a cached response
+            // must not be replayed to a different client than the one it was
+            // computed for.
+            .with_cache_scope(CacheScope::Private))
     }
 
     async fn call_tool(
