@@ -93,6 +93,14 @@ pub struct AppConfig {
     #[serde(default)]
     pub off_password: Option<RedactedString>,
 
+    /// Optional OpenFoodFacts `app_uuid` request parameter (a stable random
+    /// identifier for this installation, so OFF moderators can ban a single
+    /// user without banning the whole app account). When unset, a v4 UUID is
+    /// generated once and persisted under `$XDG_DATA_HOME/nom_mcp/`.
+    /// An identifier, not a secret — plain String on purpose.
+    #[serde(default)]
+    pub off_app_uuid: Option<String>,
+
     #[serde(default)]
     pub timezone: Option<String>,
 
@@ -198,6 +206,41 @@ pub fn db_path() -> PathBuf {
         let _ = std::fs::create_dir_all(parent);
     }
     path
+}
+
+/// Load (or create on first use) the persistent per-installation
+/// OpenFoodFacts `app_uuid`.
+///
+/// The value lives at `$XDG_DATA_HOME/nom_mcp/off_app_uuid` (same directory
+/// as the DB). On first use a fresh random v4 UUID is generated and written,
+/// so every subsequent startup reuses the same identifier — giving OFF
+/// moderators a stable per-user handle they can ban without affecting the
+/// whole app account. Callers may override via `off_app_uuid` in config.
+pub fn load_or_create_off_app_uuid() -> Result<String, std::io::Error> {
+    let data_home = std::env::var("XDG_DATA_HOME")
+        .ok()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| PathBuf::from(h).join(".local").join("share"))
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+        });
+
+    let path = data_home.join("nom_mcp").join("off_app_uuid");
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let trimmed = existing.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    let uuid = uuid::Uuid::new_v4().to_string();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, format!("{uuid}\n"))?;
+    Ok(uuid)
 }
 
 // ---------------------------------------------------------------------------
@@ -345,6 +388,43 @@ off_password = "toml-pass"
         let config = AppConfig::load().expect("should load");
         assert_eq!(config.off_username.as_ref().unwrap().get(), "env-user");
         assert_eq!(config.off_password.as_ref().unwrap().get(), "env-pass");
+    }
+
+    #[serial_test::serial]
+    #[test]
+    fn test_off_app_uuid_from_env() {
+        let mut guard = TestGuard::new();
+        guard.set("XDG_CONFIG_HOME", "/tmp/nom_mcp_nonexistent_off_uuid");
+        guard.set("NOM_MCP_OFF_APP_UUID", "custom-uuid-value");
+
+        let config = AppConfig::load().expect("should load");
+        assert_eq!(config.off_app_uuid.as_deref(), Some("custom-uuid-value"));
+    }
+
+    #[serial_test::serial]
+    #[test]
+    fn test_load_or_create_off_app_uuid_persists_across_calls() {
+        let mut guard = TestGuard::new();
+        let data_home = std::env::temp_dir().join("nom_mcp_data_test_off_uuid");
+        guard.set("XDG_DATA_HOME", &data_home.to_string_lossy());
+        guard.set("HOME", "/nonexistent-home-for-off-uuid-test");
+
+        // First call generates and persists
+        let first = load_or_create_off_app_uuid().expect("should create uuid");
+        let parsed = uuid::Uuid::parse_str(&first).expect("generated value is a valid UUID");
+        assert_eq!(parsed.get_version_num(), 4, "expected a random v4 UUID");
+
+        let file = data_home.join("nom_mcp").join("off_app_uuid");
+        assert!(file.exists(), "uuid file should be persisted");
+        assert_eq!(std::fs::read_to_string(&file).unwrap().trim(), first);
+
+        // Second call reuses the persisted value (stability across startups)
+        let second = load_or_create_off_app_uuid().expect("should read existing");
+        assert_eq!(second, first);
+
+        // Cleanup (guard only removes XDG_CONFIG_HOME-derived temp dirs via set_temp_dir,
+        // so remove this one explicitly)
+        let _ = std::fs::remove_dir_all(&data_home);
     }
 
     // -- db_path tests --

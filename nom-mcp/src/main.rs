@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use nom_core::client::{off::OffClient, usda::FdcClient};
 use nom_core::clock::Clock;
-use nom_core::config::AppConfig;
+use nom_core::config::{AppConfig, load_or_create_off_app_uuid};
 use nom_core::error::{ErrorData, cli_exit};
 use nom_core::food::{CreateCustomFood, SearchFood};
 use nom_core::goal::{GetGoalProgress, SetNutritionGoals};
@@ -147,6 +147,26 @@ fn build_clients(
             );
         }
     }
+
+    // OFF app-identity params (`app_name`/`app_version`/`app_uuid`) — required
+    // on write queries, sent on every request so OFF can attribute usage to
+    // this app and installation. The uuid is a stable random per-installation
+    // identifier: taken from config when provided, otherwise generated once
+    // and persisted under `$XDG_DATA_HOME/nom_mcp/`.
+    let app_uuid = config
+        .off_app_uuid
+        .clone()
+        .or_else(|| match load_or_create_off_app_uuid() {
+            Ok(uuid) => Some(uuid),
+            Err(e) => {
+                tracing::warn!(
+                    "could not persist OpenFoodFacts app_uuid ({e}); OFF requests will omit it"
+                );
+                None
+            }
+        });
+    off_client =
+        off_client.with_app_identity("nom_mcp", env!("CARGO_PKG_VERSION"), app_uuid.as_deref());
     let off_client = Arc::new(off_client);
 
     // USDA FDC client is optional — validated lazily when search_food runs

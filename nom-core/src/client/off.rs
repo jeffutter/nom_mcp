@@ -140,6 +140,15 @@ pub enum OffError {
 // Client
 // ---------------------------------------------------------------------------
 
+/// Per-request app-identity parameters OFF asks apps to send (`app_name`,
+/// `app_version`, `app_uuid`) so usage can be attributed and individual
+/// installations banned without affecting the whole app account.
+struct AppIdentity {
+    name: String,
+    version: String,
+    uuid: Option<String>,
+}
+
 /// Client for the Open Food Facts REST API.
 ///
 /// The base URL is a constructor parameter (not baked in), so tests can point
@@ -150,6 +159,9 @@ pub struct OffClient {
     /// Pre-built `Authorization: Basic ...` header sent with every request
     /// when credentials were supplied via [`OffClient::with_basic_auth`].
     authorization: Option<HeaderValue>,
+    /// App-identity query params appended to every request when supplied via
+    /// [`OffClient::with_app_identity`].
+    app_identity: Option<AppIdentity>,
 }
 
 /// Fields requested from the v2 product API for both barcode lookup and text
@@ -184,6 +196,7 @@ impl OffClient {
             http,
             base_url: url,
             authorization: None,
+            app_identity: None,
         })
     }
 
@@ -206,12 +219,38 @@ impl OffClient {
         self
     }
 
-    /// Build a GET request against this client, attaching the Basic-auth
-    /// header when configured. Keeps both request sites drift-free.
-    fn authed_get(&self, url: &str) -> reqwest::RequestBuilder {
+    /// Set the `app_name` / `app_version` / `app_uuid` query parameters sent
+    /// with every request this client makes.
+    ///
+    /// OFF asks apps to include these (required on write queries) so usage
+    /// can be attributed to the app and its individual installations. `uuid`
+    /// is a stable random identifier per installation; pass `None` when no
+    /// value could be resolved (name/version are still sent).
+    pub fn with_app_identity(mut self, name: &str, version: &str, uuid: Option<&str>) -> Self {
+        self.app_identity = Some(AppIdentity {
+            name: name.to_string(),
+            version: version.to_string(),
+            uuid: uuid.map(str::to_string),
+        });
+        self
+    }
+
+    /// Build a GET request against this client, appending the app-identity
+    /// query params and attaching the Basic-auth header when configured.
+    /// Keeps both request sites drift-free.
+    fn authed_get(&self, url: &Url) -> reqwest::RequestBuilder {
+        let mut url = url.clone();
+        if let Some(identity) = &self.app_identity {
+            let mut pairs = url.query_pairs_mut();
+            pairs.append_pair("app_name", &identity.name);
+            pairs.append_pair("app_version", &identity.version);
+            if let Some(uuid) = &identity.uuid {
+                pairs.append_pair("app_uuid", uuid);
+            }
+        }
         match &self.authorization {
-            Some(header) => self.http.get(url).header(AUTHORIZATION, header),
-            None => self.http.get(url),
+            Some(header) => self.http.get(url.as_str()).header(AUTHORIZATION, header),
+            None => self.http.get(url.as_str()),
         }
     }
 
@@ -237,7 +276,7 @@ impl OffClient {
         let fields = PRODUCT_FIELDS.join(",");
         url.query_pairs_mut().append_pair("fields", &fields);
 
-        let resp = self.authed_get(url.as_str()).send().await?;
+        let resp = self.authed_get(&url).send().await?;
         let body: OffResponse = resp.json().await?;
 
         match body.status {
@@ -273,7 +312,7 @@ impl OffClient {
             .append_pair("json", "1")
             .append_pair("page_size", &limit.to_string());
 
-        let resp = self.authed_get(url.as_str()).send().await?;
+        let resp = self.authed_get(&url).send().await?;
         let body: OffSearchResponse = resp.json().await?;
 
         match body.status {
@@ -686,6 +725,88 @@ mod tests {
                 req.headers
             );
         }
+    }
+
+    // -- App identity parameter tests --
+
+    #[tokio::test]
+    async fn test_lookup_barcode_sends_app_identity_params() {
+        let server = wiremock::MockServer::start().await;
+        let base_url = server.uri();
+
+        Mock::given(method("GET"))
+            .and(path("/api/v2/product/111"))
+            .and(query_param("app_name", "nom_mcp"))
+            .and(query_param("app_version", "9.9.9"))
+            .and(query_param("app_uuid", "uuid-123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": "111",
+                "status": 1,
+                "product": {}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = OffClient::new(&base_url, "test-agent/1.0")
+            .unwrap()
+            .with_app_identity("nom_mcp", "9.9.9", Some("uuid-123"));
+        client.lookup_barcode("111").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_search_products_sends_app_identity_params_without_uuid() {
+        let server = wiremock::MockServer::start().await;
+        let base_url = server.uri();
+
+        Mock::given(method("GET"))
+            .and(path("/cgi/search.pl"))
+            .and(query_param("app_name", "nom_mcp"))
+            .and(query_param("app_version", "9.9.9"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "products": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = OffClient::new(&base_url, "test-agent/1.0")
+            .unwrap()
+            .with_app_identity("nom_mcp", "9.9.9", None);
+        client.search_products("chocolate", 5).await.unwrap();
+
+        // app_name/app_version present, app_uuid absent
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let url = requests[0].url.as_str();
+        assert!(url.contains("app_name=nom_mcp"));
+        assert!(url.contains("app_version=9.9.9"));
+        assert!(!url.contains("app_uuid"));
+    }
+
+    #[tokio::test]
+    async fn test_no_app_identity_params_when_unset() {
+        let server = wiremock::MockServer::start().await;
+        let base_url = server.uri();
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": "111",
+                "status": 1,
+                "product": {}
+            })))
+            .mount(&server)
+            .await;
+
+        let client = OffClient::new(&base_url, "test-agent/1.0").unwrap();
+        client.lookup_barcode("111").await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let url = requests[0].url.as_str();
+        assert!(!url.contains("app_name="));
+        assert!(!url.contains("app_version="));
+        assert!(!url.contains("app_uuid="));
     }
 
     #[tokio::test]

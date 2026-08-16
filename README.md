@@ -141,6 +141,7 @@ Layered precedence: hardcoded defaults < TOML file < environment variables (env 
 usda_api_key = "..."              # optional — get one free at https://api.data.gov/signup
 off_username = "..."              # optional — OpenFoodFacts account username (Basic auth)
 off_password = "..."              # optional — OpenFoodFacts account password (Basic auth)
+off_app_uuid = "..."              # optional — per-installation OFF identifier; auto-generated + persisted if unset
 timezone = "America/New_York"     # optional IANA name; falls back to OS-local, then UTC
 http_bind_address = "127.0.0.1"   # bind address for `nom-mcp serve http` (accepts IPv4, IPv6, or hostname)
 
@@ -151,6 +152,8 @@ server_url = "http://localhost:8000"  # only read by nom-mcp-remote; must point 
 The USDA FDC key is optional and validated lazily — `search_food` still works against Custom Foods and OpenFoodFacts without it; only a query that needs USDA data will error if the key is missing.
 
 OpenFoodFacts credentials are also optional. When both `off_username` and `off_password` are set (or via `NOM_MCP_OFF_USERNAME` / `NOM_MCP_OFF_PASSWORD`), every OFF request carries an `Authorization: Basic ...` header — required for the OFF staging deployment (`world.openfoodfacts.net`) and any future write operations. When they're absent, nom_mcp logs a warning at startup and sends unauthenticated requests (OFF's public read API works without auth).
+
+Every OFF request also carries the app-identity parameters OFF asks apps to send: `app_name=nom_mcp`, `app_version=<version>`, and `app_uuid`. The `app_uuid` is a stable random identifier for this installation (so OFF moderators can ban a single user without affecting the whole app account): set `off_app_uuid` in config (or `NOM_MCP_OFF_APP_UUID`) to provide your own, otherwise one is generated on first use and persisted at `$XDG_DATA_HOME/nom_mcp/off_app_uuid`.
 
 ## Storage locking
 
