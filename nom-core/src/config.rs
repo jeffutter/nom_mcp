@@ -199,11 +199,9 @@ fn config_path() -> Option<PathBuf> {
     }
 }
 
-/// Resolve the database file path following XDG Base Directory spec.
-///
-/// Creates the parent directory if it doesn't exist (storage requires this;
-/// config does not auto-create).
-pub fn db_path() -> PathBuf {
+/// XDG data directory for nom_mcp (`$XDG_DATA_HOME/nom_mcp`), created if
+/// missing.
+fn data_dir() -> PathBuf {
     let data_home = std::env::var("XDG_DATA_HOME")
         .ok()
         .map(PathBuf::from)
@@ -214,13 +212,29 @@ pub fn db_path() -> PathBuf {
                 .unwrap_or_else(|| PathBuf::from("/tmp"))
         });
 
-    let path = data_home.join("nom_mcp").join("nom.db");
-    if let Some(parent) = path.parent()
-        && !parent.exists()
-    {
-        let _ = std::fs::create_dir_all(parent);
+    let dir = data_home.join("nom_mcp");
+    if !dir.exists() {
+        let _ = std::fs::create_dir_all(&dir);
     }
-    path
+    dir
+}
+
+/// Resolve the database file path following XDG Base Directory spec.
+pub fn db_path() -> PathBuf {
+    data_dir().join("nom.db")
+}
+
+/// Resolve the MCP session-persistence file path (same directory as the main
+/// DB).
+///
+/// Holds streamable-HTTP session state so sessions survive server restarts
+/// (see [`crate::storage::session_store::McpSessionStore`]). Deliberately a
+/// separate SQLite file from the domain DB: the store keeps one connection
+/// open for the process lifetime, and a live turso connection holds the
+/// advisory write lock on its file — sharing `nom.db` would make every
+/// operation's `Connection::open()` lock probe report `local_db_locked`.
+pub fn session_db_path() -> PathBuf {
+    data_dir().join("mcp_sessions.db")
 }
 
 /// Load (or create on first use) the persistent per-installation

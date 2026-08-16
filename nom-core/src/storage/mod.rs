@@ -6,8 +6,10 @@
 pub mod connection;
 pub mod lock_probe;
 pub mod migration;
+pub mod session_store;
 
 #[cfg(test)]
 pub mod test;
 
 pub use connection::{Connection, StorageError};
+pub use session_store::McpSessionStore;

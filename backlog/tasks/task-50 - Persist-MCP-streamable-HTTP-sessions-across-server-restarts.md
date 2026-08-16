@@ -1,0 +1,31 @@
+---
+id: TASK-50
+title: Persist MCP streamable-HTTP sessions across server restarts
+status: In Progress
+assignee: []
+created_date: '2026-08-16 18:04'
+labels: []
+dependencies: []
+priority: high
+type: bug
+ordinal: 56000
+---
+
+## Description
+
+<!-- SECTION:DESCRIPTION:BEGIN -->
+Claude iOS widget load fails after any nom-mcp redeploy with "Failed to load the MCP app, unable to connect to server". Root cause confirmed via v0.4.4 debug logging: the app keeps its Mcp-Session-Id across restarts; LocalSessionManager is in-memory, so post-restart requests on the stale session ID get rmcp's spec-mandated 404 ("Session not found") and the app aborts before resources/read for the widget HTML.
+
+Fix: implement rmcp 3.1.2's SessionStore trait (StreamableHttpServerConfig.session_store) backed by a dedicated SQLite file (mcp_sessions.db next to nom.db — NOT nom.db itself, because a live idle turso connection holds the advisory write lock and would break every operation's Connection::open() probe). rmcp then persists initialize_params after each successful handshake, deletes on DELETE, and transparently restores unknown sessions (recreate worker + replay initialize handshake) so stale session IDs keep working across restarts.
+
+Scope: config::session_db_path(), storage/session_store.rs (McpSessionStore + SessionStore impl + tests), wire into run_serve_http, e2e verification (initialize → kill → restart → notifications/initialized on stale ID must return 202, resources/read 200). Keep temporary debug middleware until verified in production.
+<!-- SECTION:DESCRIPTION:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 McpSessionStore implements rmcp SessionStore over a dedicated mcp_sessions.db file
+- [ ] #2 run_serve_http wires session_store into StreamableHttpServerConfig
+- [ ] #3 Unit tests: store/load/delete round-trip, missing key returns None, DDL idempotent
+- [ ] #4 E2E: fresh initialize -> kill server -> restart -> notifications/initialized on stale session ID returns 202 and resources/read returns 200
+- [ ] #5 cargo fmt/clippy/nextest all green
+<!-- AC:END -->

@@ -503,7 +503,20 @@ fn run_serve_http(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         use tokio_util::sync::CancellationToken;
 
         let ct = CancellationToken::new();
-        let mcp_config = StreamableHttpServerConfig::default().with_cancellation_token(ct.clone());
+        // Persist streamable-HTTP sessions in a dedicated SQLite file so they
+        // survive restarts: Claude iOS keeps its Mcp-Session-Id across deploys
+        // and aborts widget loads on the spec-mandated 404 that unknown
+        // sessions get otherwise. rmcp restores stale sessions transparently
+        // (recreate worker + replay initialize handshake) when a store is set.
+        let session_store = Arc::new(
+            nom_core::storage::McpSessionStore::open_at(&nom_core::config::session_db_path())
+                .await
+                .map_err(|e| format!("failed to open MCP session store: {e}"))?,
+        );
+        let mut mcp_config =
+            StreamableHttpServerConfig::default().with_cancellation_token(ct.clone());
+        // No builder method for the session store — it's a pub field.
+        mcp_config.session_store = Some(session_store.clone());
         let mcp_service = StreamableHttpService::new(
             move || Ok(handler.clone()),
             Arc::new(LocalSessionManager::default()),
@@ -552,6 +565,11 @@ fn run_serve_http(port: u16) -> Result<(), Box<dyn std::error::Error>> {
                 _ = sigterm.recv() => {}
             }
             ct.cancel();
+            // WAL checkpoint invariant before releasing the session-store
+            // connection (mirrors Connection::checkpoint on close).
+            if let Err(error) = session_store.checkpoint().await {
+                tracing::warn!(%error, "session store checkpoint failed during shutdown");
+            }
         })
         .await?;
 
