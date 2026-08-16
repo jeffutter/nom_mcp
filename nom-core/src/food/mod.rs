@@ -315,7 +315,8 @@ fn extract_off_macros(product: &crate::client::off::Product) -> NutrientValues {
 
 /// Merge search results: Custom-first ordering, deduplicate by name (case-insensitive), cap at total.
 ///
-/// Within each group (Custom, then USDA) the incoming order is preserved rather
+/// Within each group (Custom, then external sources in the order they were
+/// pushed: USDA, then OpenFoodFacts) the incoming order is preserved rather
 /// than re-sorted, since callers pass candidates in relevance order (Custom
 /// results from the DB match, USDA results in the search API's relevance
 /// ranking). Re-sorting alphabetically here would bury the most relevant hit
@@ -375,7 +376,7 @@ impl Operation for SearchFood {
     }
 
     fn description(&self) -> &str {
-        "Search for foods by barcode or name. Barcode queries (all digits) search OpenFoodFacts only. Free-text queries search custom foods and USDA FDC. Results are cached locally and include food_id for immediate use in log_meal. Search before creating custom foods to avoid duplicates."
+        "Search for foods by barcode or name. Barcode queries (all digits) search OpenFoodFacts only. Free-text queries search custom foods, OpenFoodFacts, and USDA FDC. Results are cached locally and include food_id for immediate use in log_meal. Search before creating custom foods to avoid duplicates."
     }
 
     fn input_schema(&self) -> Option<serde_json::Value> {
@@ -555,6 +556,47 @@ impl SearchFood {
         }
         // No USDA FDC client configured — return only Custom results
 
+        // 3. Search OpenFoodFacts (text search over the product catalog)
+        match self.off_client.search_products(query, 10).await {
+            Ok(products) => {
+                for product in products {
+                    let name = product.product_name.clone().unwrap_or_default();
+                    if name.is_empty() {
+                        continue;
+                    }
+                    let macros = extract_off_macros(&product);
+                    // search_products drops code-less products; this is a
+                    // second safety net so upsert never gets an empty id.
+                    let code = product.code.clone().unwrap_or_default();
+                    let food_id = upsert_catalog_food(
+                        conn,
+                        "OpenFoodFacts",
+                        &code,
+                        &name,
+                        macros,
+                        product.serving_size,
+                    )
+                    .await?;
+
+                    all_candidates.push(FoodCandidate {
+                        food_id,
+                        name,
+                        source: "OpenFoodFacts".to_string(),
+                        calories_per_100g: macros.calories,
+                        protein_g_per_100g: macros.protein_g,
+                        carbs_g_per_100g: macros.carbs_g,
+                        fat_g_per_100g: macros.fat_g,
+                        fiber_g_per_100g: macros.fiber_g,
+                        serving_size_g: product.serving_size,
+                    });
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "OpenFoodFacts search failed");
+                // Don't fail the entire search — Custom/USDA results still valid
+            }
+        }
+
         // Merge, deduplicate, cap at 5
         Ok(merge_candidates(all_candidates, 5))
     }
@@ -710,7 +752,7 @@ impl Operation for CreateCustomFood {
 mod tests {
     use super::*;
     use crate::storage::test::TempDb;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, ResponseTemplate};
 
     // -- Helper factories --
@@ -764,6 +806,7 @@ mod tests {
     #[test]
     fn test_extract_off_macros_prefers_100g_fields() {
         let product = crate::client::off::Product {
+            code: None,
             product_name: Some("Test".into()),
             serving_size: Some(50.0),
             nutrition_data_per: Some("per serving".into()),
@@ -791,6 +834,7 @@ mod tests {
     #[test]
     fn test_extract_off_macros_defaults_to_zero_when_missing() {
         let product = crate::client::off::Product {
+            code: None,
             product_name: Some("Empty".into()),
             serving_size: None,
             nutrition_data_per: None,
@@ -807,6 +851,7 @@ mod tests {
     #[test]
     fn test_extract_off_macros_no_nutriments() {
         let product = crate::client::off::Product {
+            code: None,
             product_name: Some("No Nutriments".into()),
             serving_size: None,
             nutrition_data_per: None,
@@ -1069,6 +1114,213 @@ mod tests {
         assert_eq!(arr[0]["calories_per_100g"], 231.0);
         assert_eq!(arr[0]["protein_g_per_100g"], 31.0);
         assert!(arr[0]["food_id"].is_i64());
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_search_food_free_text_off_merge() {
+        let db = TempDb::new().await;
+        let server = wiremock::MockServer::start().await;
+        let base_url = server.uri();
+
+        // USDA search + batch (same fixtures as test_search_food_free_text_usda_merge)
+        Mock::given(method("POST"))
+            .and(path("/v1/foods/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "foods": [
+                    {"fdcId": 100000, "description": "Chicken Breast", "dataType": "Foundation"}
+                ],
+                "totalHits": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/foods"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                    "fdcId": 100000,
+                    "description": "Chicken Breast",
+                    "dataType": "Foundation",
+                    "foodNutrients": [
+                        {"nutrient": {"number": "208", "name": "Energy", "unitName": "kcal"}, "amount": 231.0},
+                        {"nutrient": {"number": "203", "name": "Protein", "unitName": "g"}, "amount": 31.0},
+                        {"nutrient": {"number": "204", "name": "Total lipid (fat)", "unitName": "g"}, "amount": 5.0},
+                        {"nutrient": {"number": "205", "name": "Carbohydrate, by difference", "unitName": "g"}, "amount": 0.0},
+                        {"nutrient": {"number": "291", "name": "Fiber, total dietary", "unitName": "g"}, "amount": 0.0}
+                    ],
+                    "foodPortions": [
+                        {"modifier": "", "gramWeight": 140.0, "portionDescription": "1 breast", "amount": 140.0}
+                    ]
+                }])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // OpenFoodFacts text search returns two branded products.
+        Mock::given(method("GET"))
+            .and(path("/cgi/search.pl"))
+            .and(query_param("search_terms", "chicken"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "count": 2,
+                "products": [
+                    {
+                        "code": "1111111111111",
+                        "product_name": "Chicken Noodle Soup",
+                        "serving_size": 240.0,
+                        "nutriments": { "energy-kcal_100g": 47.0, "proteins_100g": 2.1 }
+                    },
+                    {
+                        "code": "2222222222222",
+                        "product_name": "Grilled Chicken Salad Kit",
+                        "serving_size": 180.0,
+                        "nutriments": { "energy-kcal_100g": 120.0, "proteins_100g": 9.0 }
+                    }
+                ],
+                "status": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let off = Arc::new(make_off_client(&base_url));
+        let fdc = Arc::new(make_fdc_client(&base_url));
+        let op = SearchFood::new(off, Some(fdc)).with_db_path(db.path.clone());
+
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({"query": "chicken"})))
+            .await
+            .unwrap();
+
+        let arr = result.as_array().unwrap();
+        // USDA keeps its existing priority; OFF fills the remaining slots.
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0]["source"], "USDA_FDC");
+        assert_eq!(arr[0]["name"], "Chicken Breast");
+        assert_eq!(arr[1]["source"], "OpenFoodFacts");
+        assert_eq!(arr[1]["name"], "Chicken Noodle Soup");
+        assert_eq!(arr[1]["calories_per_100g"], 47.0);
+        assert_eq!(arr[1]["protein_g_per_100g"], 2.1);
+        assert_eq!(arr[1]["serving_size_g"], 240.0);
+        assert!(arr[1]["food_id"].is_i64());
+        assert_eq!(arr[2]["source"], "OpenFoodFacts");
+        assert_eq!(arr[2]["name"], "Grilled Chicken Salad Kit");
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_search_food_free_text_off_failure_falls_through() {
+        let db = TempDb::new().await;
+        let server = wiremock::MockServer::start().await;
+        let base_url = server.uri();
+
+        // OFF text search fails (500 with a non-JSON body).
+        Mock::given(method("GET"))
+            .and(path("/cgi/search.pl"))
+            .respond_with(ResponseTemplate::new(500).set_body_raw("upstream error", "text/html"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // USDA still answers.
+        Mock::given(method("POST"))
+            .and(path("/v1/foods/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "foods": [
+                    {"fdcId": 100000, "description": "Chicken Breast", "dataType": "Foundation"}
+                ],
+                "totalHits": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/foods"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                    "fdcId": 100000,
+                    "description": "Chicken Breast",
+                    "dataType": "Foundation",
+                    "foodNutrients": [
+                        {"nutrient": {"number": "208", "name": "Energy", "unitName": "kcal"}, "amount": 231.0}
+                    ]
+                }])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let off = Arc::new(make_off_client(&base_url));
+        let fdc = Arc::new(make_fdc_client(&base_url));
+        let op = SearchFood::new(off, Some(fdc)).with_db_path(db.path.clone());
+
+        // OFF failure must not fail the search.
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({"query": "chicken"})))
+            .await
+            .unwrap();
+
+        let arr = result.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["source"], "USDA_FDC");
+        assert_eq!(arr[0]["name"], "Chicken Breast");
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_search_food_free_text_off_empty_adds_nothing() {
+        let db = TempDb::new().await;
+        let server = wiremock::MockServer::start().await;
+        let base_url = server.uri();
+
+        // Pre-seed a custom food
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        conn.execute(
+            "INSERT INTO foods (source, name, calories_per_100g, protein_g_per_100g) \
+             VALUES ('Custom', 'Homemade Chicken Salad', 250.0, 20.0)",
+            (),
+        )
+        .await
+        .unwrap();
+
+        // OFF text search returns zero products; USDA search returns empty.
+        Mock::given(method("GET"))
+            .and(path("/cgi/search.pl"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "count": 0,
+                "products": [],
+                "status": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/foods/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "foods": [],
+                "totalHits": 0
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let off = Arc::new(make_off_client(&base_url));
+        let fdc = Arc::new(make_fdc_client(&base_url));
+        let op = SearchFood::new(off, Some(fdc)).with_db_path(db.path.clone());
+
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({"query": "chicken"})))
+            .await
+            .unwrap();
+
+        let arr = result.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["source"], "Custom");
+        assert_eq!(arr[0]["name"], "Homemade Chicken Salad");
     }
 
     #[serial_test::serial]

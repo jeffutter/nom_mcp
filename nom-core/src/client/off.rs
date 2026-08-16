@@ -22,9 +22,29 @@ pub struct OffResponse {
     pub status_verbose: Option<String>,
 }
 
+/// Top-level OFF response for paginated text searches
+/// (`/cgi/search.pl?search_terms=...`). Matched products live under
+/// `products`, each carrying its own `code`.
+///
+/// Unlike the v2 single-product endpoint, this endpoint omits `status`
+/// entirely on successful responses.
+#[derive(Debug, Deserialize)]
+pub struct OffSearchResponse {
+    #[serde(default)]
+    pub products: Vec<Product>,
+    #[serde(default)]
+    pub status: Option<u8>,
+    #[serde(default)]
+    pub status_verbose: Option<String>,
+}
+
 /// Core product fields we need for nutrition lookup.
 #[derive(Debug, Deserialize)]
 pub struct Product {
+    /// Product barcode. Present in search-result items; for single-product
+    /// lookups the top-level `OffResponse.code` carries it instead.
+    #[serde(default)]
+    pub code: Option<String>,
     #[serde(default)]
     pub product_name: Option<String>,
     /// OFF returns this as a number for some products and a free-text string
@@ -127,6 +147,25 @@ pub struct OffClient {
     base_url: Url,
 }
 
+/// Fields requested from the v2 product API for both barcode lookup and text
+/// search — kept in one place so the two endpoints can't drift.
+const PRODUCT_FIELDS: [&str; 14] = [
+    "code",
+    "product_name",
+    "serving_size",
+    "nutrition_data_per",
+    "nutriments:energy-kcal",
+    "nutriments:energy-kcal_100g",
+    "nutriments:proteins",
+    "nutriments:proteins_100g",
+    "nutriments:carbohydrates",
+    "nutriments:carbohydrates_100g",
+    "nutriments:fat",
+    "nutriments:fat_100g",
+    "nutriments:fiber",
+    "nutriments:fiber_100g",
+];
+
 impl OffClient {
     /// Create a new OFF client pointing at the given base URL, using the
     /// provided user-agent string (typically from config).
@@ -161,24 +200,8 @@ impl OffClient {
         url.path_segments_mut()
             .map_err(|_| OffError::InvalidBase)?
             .extend(["api", "v2", "product", &normalized]);
-        let fields = [
-            "code",
-            "product_name",
-            "serving_size",
-            "nutrition_data_per",
-            "nutriments:energy-kcal",
-            "nutriments:energy-kcal_100g",
-            "nutriments:proteins",
-            "nutriments:proteins_100g",
-            "nutriments:carbohydrates",
-            "nutriments:carbohydrates_100g",
-            "nutriments:fat",
-            "nutriments:fat_100g",
-            "nutriments:fiber",
-            "nutriments:fiber_100g",
-        ];
-        url.query_pairs_mut()
-            .append_pair("fields", &fields.join(","));
+        let fields = PRODUCT_FIELDS.join(",");
+        url.query_pairs_mut().append_pair("fields", &fields);
 
         let resp = self.http.get(url.as_str()).send().await?;
         let body: OffResponse = resp.json().await?;
@@ -189,12 +212,53 @@ impl OffClient {
             other => Err(OffError::UnexpectedStatus(other)),
         }
     }
+
+    /// Text-search OpenFoodFacts products by name/description.
+    ///
+    /// Uses the legacy `/cgi/search.pl` endpoint — the v2 product endpoint
+    /// rejects pure text queries ("no code or invalid code"). No `fields`
+    /// scoping is sent: the legacy endpoint mishandles it, replacing the
+    /// real `nutriments` object with an empty `nutriments_estimated` when
+    /// `nutriments:*` sub-fields are requested. Returns the matched
+    /// products in OFF's relevance order; products without a barcode
+    /// (`code`) are dropped because the catalog upsert needs one as its
+    /// external id. An empty result page is `Ok(vec![])`, not an error.
+    pub async fn search_products(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<Product>, OffError> {
+        let mut url = self.base_url.clone();
+        url.path_segments_mut()
+            .map_err(|_| OffError::InvalidBase)?
+            .extend(["cgi", "search.pl"]);
+        url.query_pairs_mut()
+            .append_pair("search_terms", query)
+            .append_pair("search_simple", "1")
+            .append_pair("action", "process")
+            .append_pair("json", "1")
+            .append_pair("page_size", &limit.to_string());
+
+        let resp = self.http.get(url.as_str()).send().await?;
+        let body: OffSearchResponse = resp.json().await?;
+
+        match body.status {
+            // The search endpoint omits `status` on success; absent means OK.
+            None | Some(1) => Ok(body
+                .products
+                .into_iter()
+                .filter(|p| p.code.is_some())
+                .collect()),
+            Some(0) => Ok(Vec::new()), // no matches — not an error
+            Some(other) => Err(OffError::UnexpectedStatus(other)),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, ResponseTemplate};
 
     // -- Fixtures captured from real OFF `/api/v2/product/{barcode}` responses --
@@ -548,5 +612,120 @@ mod tests {
         let result = client.lookup_barcode("123?evil=1").await.unwrap();
         let product = result.unwrap();
         assert_eq!(product.product_name, Some("Query Injection Attempt".into()));
+    }
+
+    // -- search_products tests --
+
+    #[tokio::test]
+    async fn test_search_products_success() {
+        let server = wiremock::MockServer::start().await;
+        let base_url = server.uri();
+
+        Mock::given(method("GET"))
+            .and(path("/cgi/search.pl"))
+            .and(query_param("search_terms", "chocolate"))
+            .and(query_param("page_size", "10"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "count": 2,
+                "page": 1,
+                "page_size": 10,
+                "products": [
+                    {
+                        "code": "3017620422003",
+                        "product_name": "Dark Chocolate Bar",
+                        "serving_size": 40.0,
+                        "nutriments": { "energy-kcal_100g": 546.0, "proteins_100g": 4.9 }
+                    },
+                    {
+                        "product_name": "Codeless Product",
+                        "nutriments": { "energy-kcal_100g": 100.0 }
+                    }
+                ],
+                "status": 1,
+                "status_verbose": "Products found"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = OffClient::new(&base_url, "test-agent/1.0").unwrap();
+        let products = client.search_products("chocolate", 10).await.unwrap();
+
+        // Code-less products are dropped (upsert needs an external id).
+        assert_eq!(products.len(), 1);
+        assert_eq!(products[0].code.as_deref(), Some("3017620422003"));
+        assert_eq!(
+            products[0].product_name.as_deref(),
+            Some("Dark Chocolate Bar")
+        );
+        assert_eq!(products[0].serving_size, Some(40.0));
+        let n = products[0].nutriments.as_ref().unwrap();
+        assert_eq!(n.energy_kcal_100g, Some(546.0));
+        assert_eq!(n.proteins_100g, Some(4.9));
+    }
+
+    #[tokio::test]
+    async fn test_search_products_empty_page_is_ok() {
+        let server = wiremock::MockServer::start().await;
+        let base_url = server.uri();
+
+        // Real successful responses omit `status` entirely.
+        Mock::given(method("GET"))
+            .and(path("/cgi/search.pl"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "count": 0,
+                "products": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = OffClient::new(&base_url, "test-agent/1.0").unwrap();
+        let products = client
+            .search_products("zzz not a food zzz", 10)
+            .await
+            .unwrap();
+        assert!(products.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_search_products_status_zero_is_ok() {
+        let server = wiremock::MockServer::start().await;
+        let base_url = server.uri();
+
+        Mock::given(method("GET"))
+            .and(path("/cgi/search.pl"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "products": [],
+                "status": 0,
+                "status_verbose": "No products found"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = OffClient::new(&base_url, "test-agent/1.0").unwrap();
+        let products = client.search_products("nothing", 10).await.unwrap();
+        assert!(products.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_search_products_unexpected_status() {
+        let server = wiremock::MockServer::start().await;
+        let base_url = server.uri();
+
+        Mock::given(method("GET"))
+            .and(path("/cgi/search.pl"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "products": [],
+                "status": 99
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = OffClient::new(&base_url, "test-agent/1.0").unwrap();
+        let err = client.search_products("x", 10).await.unwrap_err();
+        assert!(matches!(err, OffError::UnexpectedStatus(99)));
     }
 }
