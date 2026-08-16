@@ -6,6 +6,9 @@
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 
+use axum::extract::ConnectInfo;
+use axum::response::IntoResponse;
+
 use nom_core::client::{off::OffClient, usda::FdcClient};
 use nom_core::clock::Clock;
 use nom_core::config::{AppConfig, load_or_create_off_app_uuid};
@@ -265,21 +268,102 @@ fn resolve_bind_addr(bind_address: &str, port: u16) -> std::io::Result<SocketAdd
 /// rejects before they reach the `McpHandler` (e.g. Claude iOS's bogus
 /// `MCP-Protocol-Version: 2026-01-26` header) — so the full per-session
 /// request stream is visible alongside the identity logs from
-/// `on_initialized`. Remove once the investigation is done.
+/// `on_initialized`. Also extracts the JSON-RPC method name(s) from POST
+/// bodies so each line shows which MCP call arrived (`tools/list`,
+/// `resources/read`, `tools/call:<tool>`, ...) plus the peer address, so
+/// traffic from different clients/relays can be told apart by origin.
+/// Remove once the investigation is done.
 async fn debug_log_mcp_request(
-    req: axum::extract::Request,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    mut req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    if req.uri().path().starts_with("/mcp") {
-        tracing::debug!(
-            method = %req.method(),
-            path = %req.uri().path(),
-            mcp_session_id = ?req.headers().get(axum::http::header::HeaderName::from_static("mcp-session-id")),
-            mcp_protocol_version = ?req.headers().get(axum::http::header::HeaderName::from_static("mcp-protocol-version")),
-            "MCP HTTP request"
-        );
+    if !req.uri().path().starts_with("/mcp") {
+        return next.run(req).await;
     }
+    let http_method = req.method().clone();
+    // Clone (not borrow): `req` is destructured/reassigned below for the
+    // POST-body extraction.
+    let mcp_session_id = req
+        .headers()
+        .get(axum::http::header::HeaderName::from_static(
+            "mcp-session-id",
+        ))
+        .cloned();
+    let mcp_protocol_version = req
+        .headers()
+        .get(axum::http::header::HeaderName::from_static(
+            "mcp-protocol-version",
+        ))
+        .cloned();
+
+    let jsonrpc_methods = if http_method == axum::http::Method::POST {
+        let (parts, body) = req.into_parts();
+        match axum::body::to_bytes(body, 1_048_576).await {
+            Ok(bytes) => {
+                let methods = extract_jsonrpc_methods(&bytes);
+                req = axum::http::Request::from_parts(parts, axum::body::Body::from(bytes));
+                methods
+            }
+            Err(error) => {
+                // Body unreadable/too large: log what we have and stop here
+                // rather than forwarding a consumed body.
+                tracing::debug!(
+                    peer = %peer,
+                    ?mcp_session_id,
+                    ?mcp_protocol_version,
+                    "MCP HTTP request (body unreadable, not forwarded: {error})"
+                );
+                return (axum::http::StatusCode::PAYLOAD_TOO_LARGE,).into_response();
+            }
+        }
+    } else {
+        None
+    };
+
+    tracing::debug!(
+        peer = %peer,
+        method = %http_method,
+        path = %req.uri().path(),
+        ?mcp_session_id,
+        ?mcp_protocol_version,
+        ?jsonrpc_methods,
+        "MCP HTTP request"
+    );
     next.run(req).await
+}
+
+/// Extract short descriptions of the JSON-RPC messages in a streamable-HTTP
+/// POST body (single message or batch array): each method name, annotated
+/// with the tool name for `tools/call` and the resource URI for
+/// `resources/read`. `None` for anything unparseable (e.g. an empty body or
+/// a response-only body with no `method`).
+fn extract_jsonrpc_methods(body: &[u8]) -> Option<String> {
+    let value = serde_json::from_slice::<serde_json::Value>(body).ok()?;
+    Some(match value {
+        serde_json::Value::Array(batch) => batch
+            .iter()
+            .filter_map(describe_jsonrpc_message)
+            .collect::<Vec<_>>()
+            .join(","),
+        other => describe_jsonrpc_message(&other)?,
+    })
+}
+
+/// Describe one JSON-RPC message: its method, annotated with the tool name
+/// (`tools/call`) or resource URI (`resources/read`) when present.
+fn describe_jsonrpc_message(message: &serde_json::Value) -> Option<String> {
+    let method = message.get("method").and_then(serde_json::Value::as_str)?;
+    let detail = match method {
+        "tools/call" => message.pointer("/params/name"),
+        "resources/read" => message.pointer("/params/uri"),
+        _ => None,
+    }
+    .and_then(serde_json::Value::as_str);
+    Some(match detail {
+        Some(detail) => format!("{method}:{detail}"),
+        None => method.to_string(),
+    })
 }
 
 /// Run nom-mcp as an HTTP server exposing both the REST API (`/api/*`) and a
@@ -318,15 +402,18 @@ fn run_serve_http(port: u16) -> Result<(), Box<dyn std::error::Error>> {
 
         let mut sigterm =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-        axum::serve(listener, router.into_make_service())
-            .with_graceful_shutdown(async move {
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {}
-                    _ = sigterm.recv() => {}
-                }
-                ct.cancel();
-            })
-            .await?;
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = sigterm.recv() => {}
+            }
+            ct.cancel();
+        })
+        .await?;
 
         Ok::<_, Box<dyn std::error::Error>>(())
     })

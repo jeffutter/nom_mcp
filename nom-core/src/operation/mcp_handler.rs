@@ -478,11 +478,22 @@ impl ServerHandler for McpHandler {
     async fn read_resource(
         &self,
         request: rmcp::model::ReadResourceRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
-        self.dispatch_read_resource(&request.uri)
-            .await
-            .map(Into::into)
+        let client_name = context.client_info().map(|info| info.name);
+        let uri = request.uri.to_string();
+        // TEMPORARY debug logging (investigating widget gating since 81d32ff):
+        // the widget-load path — which URIs clients fetch and whether they
+        // succeed (iOS currently fails app load with "unable to connect to
+        // server").
+        let outcome = self.dispatch_read_resource(&request.uri).await;
+        tracing::debug!(
+            ?client_name,
+            %uri,
+            ok = outcome.is_ok(),
+            "resources/read"
+        );
+        outcome.map(Into::into)
     }
 }
 
