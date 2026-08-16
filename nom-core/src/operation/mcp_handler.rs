@@ -40,19 +40,6 @@ const GOAL_PROGRESS_UI_RESOURCE_URI: &str = "ui://nom-mcp/goal-progress";
 /// session and then never issuing a follow-up request at all.
 const UI_EXTENSION_ID: &str = "io.modelcontextprotocol/ui";
 
-/// `client_info.name` reported by Claude's iOS app during `initialize`.
-///
-/// That client unconditionally sends `MCP-Protocol-Version: 2026-01-26` for
-/// any tool call it believes is MCP-Apps-capable — a value no MCP SDK
-/// (rmcp or mcp-go) accepts, since it's the MCP Apps extension's
-/// finalization date, not a real protocol version — so every such call is
-/// rejected before it reaches this server. Hiding `_meta.ui` from this
-/// client specifically means it never learns `get_goal_progress`/
-/// `get_weekly_progress` have widgets, so it never takes that broken path;
-/// it just calls the tools normally, like it already does successfully for
-/// every non-widget tool. Desktop/web are unaffected.
-const CLAUDE_IOS_CLIENT_NAME: &str = "claude-ios";
-
 /// Static widget HTML served for [`GOAL_PROGRESS_UI_RESOURCE_URI`].
 ///
 /// Self-contained (inline CSS/JS, no external requests) because the MCP Apps
@@ -79,9 +66,8 @@ const WEEKLY_PROGRESS_WIDGET_HTML: &str = include_str!("../../assets/weekly_prog
 /// omission.
 ///
 /// `LISTING_TTL_MS` covers `tools/list`/`resources/list`: short, because
-/// `get_goal_progress`'s `_meta.ui` is gated on both the
-/// `widget_display_enabled` setting and the requesting client (see
-/// `build_tools_gated`), either of which can change between requests.
+/// `get_goal_progress`'s `_meta.ui` is gated on the `widget_display_enabled`
+/// setting (see `build_tools_gated`), which can change between requests.
 /// `WIDGET_HTML_TTL_MS` covers the goal-progress widget's `ui://` resource:
 /// long, because that HTML is `include_str!`-baked into the binary and is
 /// byte-identical for every request until the next deploy.
@@ -168,23 +154,18 @@ impl McpHandler {
 
     /// Build the tool list, additionally gating `get_goal_progress`'s and
     /// `get_weekly_progress`'s MCP Apps `_meta.ui` pointers on the shared
-    /// widget-display setting (TASK-41) and on the requesting client not
-    /// being [`CLAUDE_IOS_CLIENT_NAME`] (see that constant's doc comment).
+    /// widget-display setting (TASK-41).
     ///
-    /// `requesting_client_name` takes a bare `&str` rather than the
-    /// `RequestContext<RoleServer>` it's ultimately sourced from (mirroring
-    /// `build_tools`/`dispatch_read_resource`) so tests can call it directly
-    /// without constructing one.
+    /// Kept as a plain inherent method (mirroring `build_tools`/
+    /// `dispatch_read_resource`) so tests can call it directly without
+    /// constructing a `RequestContext<RoleServer>`.
     ///
     /// The widget-display setting is a cosmetic nicety, not a prerequisite
     /// for tool discovery: any failure opening the DB or reading the
     /// setting is treated the same as "no settings row" (gating disabled),
     /// logged and otherwise ignored, so a DB hiccup never removes tools
     /// from `tools/list`.
-    pub(crate) async fn build_tools_gated(
-        &self,
-        requesting_client_name: Option<&str>,
-    ) -> Vec<Tool> {
+    pub(crate) async fn build_tools_gated(&self) -> Vec<Tool> {
         let mut tools = self.build_tools();
 
         #[cfg(test)]
@@ -216,7 +197,7 @@ impl McpHandler {
             }
         };
 
-        if widget_display_enabled && requesting_client_name != Some(CLAUDE_IOS_CLIENT_NAME) {
+        if widget_display_enabled {
             for tool in tools.iter_mut() {
                 match tool.name.as_ref() {
                     "get_goal_progress" => tool.meta = Some(goal_progress_ui_meta()),
@@ -397,11 +378,10 @@ impl ServerHandler for McpHandler {
             .with_server_info(Implementation::new("nom-mcp", env!("CARGO_PKG_VERSION")))
     }
 
-    /// TEMPORARY debug logging (investigating widget gating since 81d32ff):
+    /// TEMPORARY debug logging (investigating widget loading on Claude iOS):
     /// log the exact `clientInfo` each platform reports at MCP handshake,
-    /// so we can compare what Claude iOS vs desktop/web actually send against
-    /// the [`CLAUDE_IOS_CLIENT_NAME`] assumption baked into
-    /// `build_tools_gated`. Remove once client identities are confirmed.
+    /// so we can compare what Claude iOS vs desktop/web actually send.
+    /// Remove once the iOS widget flow is verified in production (TASK-51).
     async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
         match context.peer.peer_info() {
             Some(info) => tracing::debug!(
@@ -427,24 +407,18 @@ impl ServerHandler for McpHandler {
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        context: RequestContext<RoleServer>,
+        _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let client_name = context.client_info().map(|info| info.name);
-        let tools = self.build_tools_gated(client_name.as_deref()).await;
-        // TEMPORARY debug logging (investigating widget gating since 81d32ff):
-        // correlates the requesting identity with what it actually sees.
+        let tools = self.build_tools_gated().await;
+        // TEMPORARY debug logging (investigating widget loading on Claude
+        // iOS): how many tools carry `_meta.ui` in this response.
         tracing::debug!(
-            ?client_name,
             ui_meta_tool_count = tools.iter().filter(|t| t.meta.is_some()).count(),
             "tools/list: widget gating decision"
         );
         Ok(ListToolsResult::with_all_items(tools)
             .with_ttl_ms(LISTING_TTL_MS)
-            // Private, not Public: output now varies by requesting client
-            // (CLAUDE_IOS_CLIENT_NAME never gets _meta.ui), so a cached response
-            // must not be replayed to a different client than the one it was
-            // computed for.
-            .with_cache_scope(CacheScope::Private))
+            .with_cache_scope(CacheScope::Public))
     }
 
     async fn call_tool(
@@ -743,7 +717,7 @@ mod tests {
         let db = TempDb::new().await;
         let handler = handler_with_goal_progress(db.path.clone());
 
-        let tools = handler.build_tools_gated(None).await;
+        let tools = handler.build_tools_gated().await;
 
         for name in ["get_goal_progress", "get_weekly_progress"] {
             let tool = tools
@@ -776,7 +750,7 @@ mod tests {
             .unwrap();
 
         let handler = handler_with_goal_progress(db.path.clone());
-        let tools = handler.build_tools_gated(None).await;
+        let tools = handler.build_tools_gated().await;
 
         for (name, uri) in [
             ("get_goal_progress", GOAL_PROGRESS_UI_RESOURCE_URI),
@@ -802,34 +776,6 @@ mod tests {
         assert!(test_op.meta.is_none());
     }
 
-    /// AC: even with `widget_display_enabled = true`, a request identifying
-    /// itself as [`CLAUDE_IOS_CLIENT_NAME`] gets no `_meta.ui` on either
-    /// widget-backed tool — see that constant's doc comment for why.
-    #[serial_test::serial]
-    #[tokio::test]
-    async fn test_list_tools_hides_ui_meta_from_claude_ios() {
-        let db = TempDb::new().await;
-
-        let set_widget = crate::widget::SetWidgetDisplay::new().with_db_path(db.path.clone());
-        set_widget
-            .execute_json(Arc::new(serde_json::json!({ "enabled": true })))
-            .await
-            .unwrap();
-
-        let handler = handler_with_goal_progress(db.path.clone());
-        let tools = handler
-            .build_tools_gated(Some(CLAUDE_IOS_CLIENT_NAME))
-            .await;
-
-        for name in ["get_goal_progress", "get_weekly_progress"] {
-            let tool = tools
-                .iter()
-                .find(|t| t.name.as_ref() == name)
-                .unwrap_or_else(|| panic!("{name} should be registered"));
-            assert!(tool.meta.is_none());
-        }
-    }
-
     /// TASK-44: a DB-open failure while resolving the widget-display
     /// setting must not take down `tools/list` for every other tool — it
     /// should be treated exactly like "no settings row" (gating disabled).
@@ -846,7 +792,7 @@ mod tests {
         let bad_db_path = blocking_file.join("unreachable.db");
 
         let handler = handler_with_goal_progress(bad_db_path);
-        let tools = handler.build_tools_gated(None).await;
+        let tools = handler.build_tools_gated().await;
 
         let goal_progress = tools
             .iter()
