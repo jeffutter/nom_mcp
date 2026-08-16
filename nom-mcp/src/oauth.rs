@@ -220,9 +220,6 @@ mod tests {
         RSAKeyType,
     };
     use jsonwebtoken::{EncodingKey, Header, encode};
-    use rsa::RsaPrivateKey;
-    use rsa::pkcs1::EncodeRsaPrivateKey;
-    use rsa::traits::PublicKeyParts;
     use serde_json::json;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -230,18 +227,23 @@ mod tests {
     const ISSUER_PATH: &str = "";
     const KID: &str = "test-key-1";
 
-    /// Spin up a fake authorization server: OIDC discovery + JWKS, backed
-    /// by a freshly generated RSA keypair. Returns the mock server, the
-    /// signing key (for minting test tokens), and the resource server's
-    /// `OAuthState` pointed at it.
-    async fn fake_authorization_server() -> (MockServer, RsaPrivateKey, Arc<OAuthState>) {
-        let server = MockServer::start().await;
-        let mut rng = rand::thread_rng();
-        let private_key = RsaPrivateKey::new(&mut rng, 2048).expect("generate RSA key");
-        let public_key = private_key.to_public_key();
+    // Fixed 2048-bit RSA test fixtures (generated once, offline, for this
+    // test suite only — never used for anything real). Hardcoding them
+    // avoids a runtime dependency on an RSA-keygen crate just to sign
+    // throwaway tokens in tests: RustSec flags the `rsa` crate for a
+    // private-key timing side-channel (RUSTSEC-2023-0071), which is
+    // irrelevant to signing local test fixtures but still trips `cargo
+    // audit` if the crate is present at all.
+    const PRIMARY_KEY_PEM: &str = include_str!("../testdata/oauth_test_key_primary.pem");
+    const PRIMARY_KEY_N: &str = "7wY3L3_ZpXRHU-95Pw8medCUbHx5t01TUktRH4nKdRmZlIwbf3KIhArV24Wm8gPY9tHzYaWQlE1Eg_RQNTVL6cEOBNg7QPudsgCEY6EcwkcIlrgohlYsd-wDv7nokwPCJql7MRyKHdsVkDvQoGA0X9UvvhYghRe2gj1t6oiEWz2a-J5y8zzhWNel-XloWKMKbptfwZYhW_Anm0_foJs6qjjVGJDGPYGKcq52PSfmYICo1rjHin7JSy-foYhtDJ71Rn9uI05cLngr8AhG3B2JTynPomLVk9v5WzmS83qxNDTPkGFy9hQSMLd_7RCh_sTlXiLWGhw63_O7EZ2um0comQ";
+    const PRIMARY_KEY_E: &str = "AQAB";
+    const FORGED_KEY_PEM: &str = include_str!("../testdata/oauth_test_key_forged.pem");
 
-        let n = base64_url(&public_key.n().to_bytes_be());
-        let e = base64_url(&public_key.e().to_bytes_be());
+    /// Spin up a fake authorization server: OIDC discovery + JWKS, backed
+    /// by a fixed RSA test fixture key. Returns the mock server and the
+    /// resource server's `OAuthState` pointed at it.
+    async fn fake_authorization_server() -> (MockServer, Arc<OAuthState>) {
+        let server = MockServer::start().await;
 
         let jwk = Jwk {
             common: CommonParameters {
@@ -252,8 +254,8 @@ mod tests {
             },
             algorithm: AlgorithmParameters::RSA(RSAKeyParameters {
                 key_type: RSAKeyType::RSA,
-                n,
-                e,
+                n: PRIMARY_KEY_N.to_string(),
+                e: PRIMARY_KEY_E.to_string(),
             }),
         };
         let jwk_set = JwkSet { keys: vec![jwk] };
@@ -276,12 +278,7 @@ mod tests {
             .await
             .expect("discovery should succeed against the mock server");
 
-        (server, private_key, oauth)
-    }
-
-    fn base64_url(bytes: &[u8]) -> String {
-        use base64::Engine;
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+        (server, oauth)
     }
 
     #[derive(serde::Serialize)]
@@ -292,14 +289,11 @@ mod tests {
         sub: String,
     }
 
-    fn mint_token(private_key: &RsaPrivateKey, issuer: &str, claims: Claims) -> String {
-        let pem = private_key
-            .to_pkcs1_pem(rsa::pkcs1::LineEnding::LF)
-            .expect("encode private key");
-        let encoding_key = EncodingKey::from_rsa_pem(pem.as_bytes()).expect("load encoding key");
+    fn mint_token(private_key_pem: &str, claims: Claims) -> String {
+        let encoding_key =
+            EncodingKey::from_rsa_pem(private_key_pem.as_bytes()).expect("load encoding key");
         let mut header = Header::new(Algorithm::RS256);
         header.kid = Some(KID.to_string());
-        let _ = issuer; // issuer is already embedded in `claims.iss`
         encode(&header, &claims, &encoding_key).expect("sign token")
     }
 
@@ -318,49 +312,48 @@ mod tests {
 
     #[tokio::test]
     async fn accepts_a_valid_token() {
-        let (_server, key, oauth) = fake_authorization_server().await;
-        let token = mint_token(&key, &oauth.issuer, valid_claims(&oauth.issuer));
+        let (_server, oauth) = fake_authorization_server().await;
+        let token = mint_token(PRIMARY_KEY_PEM, valid_claims(&oauth.issuer));
         assert!(oauth.validate(&token).await.is_ok());
     }
 
     #[tokio::test]
     async fn rejects_expired_token() {
-        let (_server, key, oauth) = fake_authorization_server().await;
+        let (_server, oauth) = fake_authorization_server().await;
         let mut claims = valid_claims(&oauth.issuer);
         claims.exp = 1;
-        let token = mint_token(&key, &oauth.issuer, claims);
+        let token = mint_token(PRIMARY_KEY_PEM, claims);
         assert!(oauth.validate(&token).await.is_err());
     }
 
     #[tokio::test]
     async fn rejects_wrong_issuer() {
-        let (_server, key, oauth) = fake_authorization_server().await;
+        let (_server, oauth) = fake_authorization_server().await;
         let mut claims = valid_claims(&oauth.issuer);
         claims.iss = "https://not-the-real-issuer.example.com".to_string();
-        let token = mint_token(&key, &oauth.issuer, claims);
+        let token = mint_token(PRIMARY_KEY_PEM, claims);
         assert!(oauth.validate(&token).await.is_err());
     }
 
     #[tokio::test]
     async fn rejects_wrong_audience() {
-        let (_server, key, oauth) = fake_authorization_server().await;
+        let (_server, oauth) = fake_authorization_server().await;
         let mut claims = valid_claims(&oauth.issuer);
         claims.aud = "https://someone-elses-server.example.com/mcp".to_string();
-        let token = mint_token(&key, &oauth.issuer, claims);
+        let token = mint_token(PRIMARY_KEY_PEM, claims);
         assert!(oauth.validate(&token).await.is_err());
     }
 
     #[tokio::test]
     async fn rejects_bad_signature() {
-        let (_server, _key, oauth) = fake_authorization_server().await;
-        let forged_key = RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap();
-        let token = mint_token(&forged_key, &oauth.issuer, valid_claims(&oauth.issuer));
+        let (_server, oauth) = fake_authorization_server().await;
+        let token = mint_token(FORGED_KEY_PEM, valid_claims(&oauth.issuer));
         assert!(oauth.validate(&token).await.is_err());
     }
 
     #[tokio::test]
     async fn missing_header_yields_401_with_www_authenticate() {
-        let (_server, _key, oauth) = fake_authorization_server().await;
+        let (_server, oauth) = fake_authorization_server().await;
         let response = unauthorized(&oauth);
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         let header = response
@@ -376,7 +369,7 @@ mod tests {
 
     #[tokio::test]
     async fn metadata_shape_is_correct() {
-        let (_server, _key, oauth) = fake_authorization_server().await;
+        let (_server, oauth) = fake_authorization_server().await;
         let Json(body) = metadata_handler(State(oauth.clone())).await;
         assert_eq!(body["resource"], "https://nom.example.com/mcp");
         assert_eq!(body["authorization_servers"][0], oauth.issuer);
