@@ -4,6 +4,8 @@
 //! `openfoodfacts-rust` crate. Hand-scoped serde structs deserialize only
 //! the fields nom_mcp needs from the `/api/v2/product/{barcode}` endpoint.
 
+use base64::Engine;
+use http::header::{AUTHORIZATION, HeaderValue};
 use serde::Deserialize;
 use url::Url;
 
@@ -145,6 +147,9 @@ pub enum OffError {
 pub struct OffClient {
     http: reqwest::Client,
     base_url: Url,
+    /// Pre-built `Authorization: Basic ...` header sent with every request
+    /// when credentials were supplied via [`OffClient::with_basic_auth`].
+    authorization: Option<HeaderValue>,
 }
 
 /// Fields requested from the v2 product API for both barcode lookup and text
@@ -178,7 +183,36 @@ impl OffClient {
         Ok(Self {
             http,
             base_url: url,
+            authorization: None,
         })
+    }
+
+    /// Attach HTTP Basic auth credentials, sent as an `Authorization` header
+    /// on every request this client makes.
+    ///
+    /// Per the OFF API docs, read operations don't require authentication, but
+    /// the staging deployment (`world.openfoodfacts.net`) requires Basic auth
+    /// and write operations do. When either credential is empty the client is
+    /// returned unchanged (no `Authorization` header).
+    pub fn with_basic_auth(mut self, username: &str, password: &str) -> Self {
+        if !username.is_empty() && !password.is_empty() {
+            let token =
+                base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
+            // "Basic " + standard base64 are always valid header tokens.
+            let value = HeaderValue::from_str(&format!("Basic {token}"))
+                .expect("valid Authorization header value");
+            self.authorization = Some(value);
+        }
+        self
+    }
+
+    /// Build a GET request against this client, attaching the Basic-auth
+    /// header when configured. Keeps both request sites drift-free.
+    fn authed_get(&self, url: &str) -> reqwest::RequestBuilder {
+        match &self.authorization {
+            Some(header) => self.http.get(url).header(AUTHORIZATION, header),
+            None => self.http.get(url),
+        }
     }
 
     /// Create with the production base URL (`https://world.openfoodfacts.org`).
@@ -203,7 +237,7 @@ impl OffClient {
         let fields = PRODUCT_FIELDS.join(",");
         url.query_pairs_mut().append_pair("fields", &fields);
 
-        let resp = self.http.get(url.as_str()).send().await?;
+        let resp = self.authed_get(url.as_str()).send().await?;
         let body: OffResponse = resp.json().await?;
 
         match body.status {
@@ -239,7 +273,7 @@ impl OffClient {
             .append_pair("json", "1")
             .append_pair("page_size", &limit.to_string());
 
-        let resp = self.http.get(url.as_str()).send().await?;
+        let resp = self.authed_get(url.as_str()).send().await?;
         let body: OffSearchResponse = resp.json().await?;
 
         match body.status {
@@ -563,6 +597,95 @@ mod tests {
         let client = OffClient::new(&base_url, "custom-agent/2.0").unwrap();
         client.lookup_barcode("111").await.unwrap();
         // If we get here without the mock rejecting the request, the header matched
+    }
+
+    // -- Basic auth tests --
+
+    /// base64("user:pass") == "dXNlcjpwYXNz"
+    const BASIC_AUTH_HEADER: &str = "Basic dXNlcjpwYXNz";
+
+    #[tokio::test]
+    async fn test_lookup_barcode_sends_basic_auth_header() {
+        let server = wiremock::MockServer::start().await;
+        let base_url = server.uri();
+
+        Mock::given(method("GET"))
+            .and(path("/api/v2/product/111"))
+            .and(header("authorization", BASIC_AUTH_HEADER))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": "111",
+                "status": 1,
+                "product": {}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = OffClient::new(&base_url, "test-agent/1.0")
+            .unwrap()
+            .with_basic_auth("user", "pass");
+        client.lookup_barcode("111").await.unwrap();
+        // If we get here without the mock rejecting the request, the header matched
+    }
+
+    #[tokio::test]
+    async fn test_search_products_sends_basic_auth_header() {
+        let server = wiremock::MockServer::start().await;
+        let base_url = server.uri();
+
+        Mock::given(method("GET"))
+            .and(path("/cgi/search.pl"))
+            .and(header("authorization", BASIC_AUTH_HEADER))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "products": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = OffClient::new(&base_url, "test-agent/1.0")
+            .unwrap()
+            .with_basic_auth("user", "pass");
+        client.search_products("chocolate", 5).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_no_authorization_header_without_credentials() {
+        let server = wiremock::MockServer::start().await;
+        let base_url = server.uri();
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": "111",
+                "status": 1,
+                "product": {}
+            })))
+            .mount(&server)
+            .await;
+
+        // No credentials at all
+        let client = OffClient::new(&base_url, "test-agent/1.0").unwrap();
+        client.lookup_barcode("111").await.unwrap();
+
+        // Partial credentials (empty password) must also send no header
+        let client = OffClient::new(&base_url, "test-agent/1.0")
+            .unwrap()
+            .with_basic_auth("user", "");
+        client.search_products("chocolate", 5).await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2);
+        for req in &requests {
+            let has_auth = req
+                .headers
+                .iter()
+                .any(|(name, _)| name.as_str().eq_ignore_ascii_case("authorization"));
+            assert!(
+                !has_auth,
+                "no Authorization header expected, got: {:?}",
+                req.headers
+            );
+        }
     }
 
     #[tokio::test]

@@ -124,10 +124,30 @@ fn build_registry(
 fn build_clients(
     config: &AppConfig,
 ) -> Result<(Arc<OffClient>, Option<Arc<FdcClient>>), ErrorData> {
-    let off_client = Arc::new(
-        OffClient::new("https://world.openfoodfacts.org", &config.off_user_agent)
-            .map_err(|e| ErrorData::storage_failure(format!("OFF client init failed: {e}")))?,
-    );
+    let mut off_client = OffClient::new("https://world.openfoodfacts.org", &config.off_user_agent)
+        .map_err(|e| ErrorData::storage_failure(format!("OFF client init failed: {e}")))?;
+
+    // Optional OFF Basic-auth credentials (env vars NOM_MCP_OFF_USERNAME /
+    // NOM_MCP_OFF_PASSWORD or the TOML config). Both must be set together;
+    // otherwise requests go out unauthenticated and we warn at startup.
+    match (config.off_username.as_ref(), config.off_password.as_ref()) {
+        (Some(u), Some(p)) if !u.get().is_empty() && !p.get().is_empty() => {
+            off_client = off_client.with_basic_auth(u.get(), p.get());
+        }
+        (None, None) => {
+            tracing::warn!(
+                "OpenFoodFacts credentials not configured (set NOM_MCP_OFF_USERNAME and \
+                 NOM_MCP_OFF_PASSWORD); OFF requests will be unauthenticated"
+            );
+        }
+        _ => {
+            tracing::warn!(
+                "OpenFoodFacts credentials incomplete (both off_username and off_password \
+                 must be set); falling back to unauthenticated OFF requests"
+            );
+        }
+    }
+    let off_client = Arc::new(off_client);
 
     // USDA FDC client is optional — validated lazily when search_food runs
     let fdc_client: Option<Arc<FdcClient>> = config

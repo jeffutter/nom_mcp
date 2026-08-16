@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 async-trait = "0.1.92"
 axum = "0.8.9"
+base64 = "0.22"
 bitflags = { version = "2.13.1", features = ["serde"] }
 clap = "4.6.6"
 config = { version = "0.15", default-features = false, features = ["toml"] }

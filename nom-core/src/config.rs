@@ -84,6 +84,15 @@ pub struct AppConfig {
     #[serde(default)]
     pub usda_api_key: Option<RedactedString>,
 
+    /// Optional OpenFoodFacts credentials for HTTP Basic auth (`Authorization`
+    /// header). Both must be set together; when absent, OFF requests are sent
+    /// unauthenticated and a warning is logged at startup.
+    #[serde(default)]
+    pub off_username: Option<RedactedString>,
+
+    #[serde(default)]
+    pub off_password: Option<RedactedString>,
+
     #[serde(default)]
     pub timezone: Option<String>,
 
@@ -263,6 +272,8 @@ mod tests {
         assert_eq!(config.http_bind_address, "127.0.0.1");
         assert!(config.off_user_agent.starts_with("nom_mcp/"));
         assert!(config.usda_api_key.is_none());
+        assert!(config.off_username.is_none());
+        assert!(config.off_password.is_none());
         assert!(config.timezone.is_none());
         assert!(config.remote.server_url.is_none());
     }
@@ -277,6 +288,63 @@ mod tests {
         let debug = format!("{:?}", config);
         // The field name appears but never a real key value
         assert!(debug.contains("usda_api_key"));
+    }
+
+    #[serial_test::serial]
+    #[test]
+    fn test_off_credentials_from_env_are_redacted() {
+        let mut guard = TestGuard::new();
+        guard.set("XDG_CONFIG_HOME", "/tmp/nom_mcp_nonexistent_off_creds");
+        guard.set("NOM_MCP_OFF_USERNAME", "off-user");
+        guard.set("NOM_MCP_OFF_PASSWORD", "off-secret-pass");
+
+        let config = AppConfig::load().expect("should load");
+        assert_eq!(config.off_username.as_ref().unwrap().get(), "off-user");
+        assert_eq!(
+            config.off_password.as_ref().unwrap().get(),
+            "off-secret-pass"
+        );
+
+        // Debug output must never leak the credential values
+        let debug = format!("{:?}", config);
+        assert!(!debug.contains("off-secret-pass"));
+        assert!(!debug.contains("off-user"));
+        assert!(debug.contains("[REDACTED]"));
+    }
+
+    #[serial_test::serial]
+    #[test]
+    fn test_off_credentials_toml_and_env_precedence() {
+        let mut guard = TestGuard::new();
+
+        let temp_dir = std::env::temp_dir().join("nom_mcp_config_test_off");
+        let config_dir = temp_dir.join("config");
+        let file_path = config_dir.join("nom_mcp").join("config.toml");
+
+        std::fs::create_dir_all(config_dir.join("nom_mcp")).ok();
+        std::fs::write(
+            &file_path,
+            r#"
+off_username = "toml-user"
+off_password = "toml-pass"
+"#,
+        )
+        .expect("failed to write test config");
+
+        guard.set_temp_dir(temp_dir.clone());
+        guard.set("XDG_CONFIG_HOME", &config_dir.to_string_lossy());
+
+        // TOML values load when no env vars are set
+        let config = AppConfig::load().expect("should load from TOML");
+        assert_eq!(config.off_username.as_ref().unwrap().get(), "toml-user");
+        assert_eq!(config.off_password.as_ref().unwrap().get(), "toml-pass");
+
+        // Env vars win over TOML
+        guard.set("NOM_MCP_OFF_USERNAME", "env-user");
+        guard.set("NOM_MCP_OFF_PASSWORD", "env-pass");
+        let config = AppConfig::load().expect("should load");
+        assert_eq!(config.off_username.as_ref().unwrap().get(), "env-user");
+        assert_eq!(config.off_password.as_ref().unwrap().get(), "env-pass");
     }
 
     // -- db_path tests --
