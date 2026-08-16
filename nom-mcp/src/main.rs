@@ -24,6 +24,8 @@ use nom_core::weight::{
 };
 use nom_core::widget::{GetWidgetDisplay, SetWidgetDisplay};
 
+mod oauth;
+
 fn main() {
     // The 'serve' subcommand runs a long-lived MCP server (stdio or HTTP)
     // instead of the one-shot local-CLI dispatch; it has its own tracing
@@ -479,6 +481,21 @@ fn run_serve_http(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     let handler = nom_core::operation::mcp_handler::McpHandler::new(registry.clone(), *clock);
     let bind_address = config.http_bind_address.clone();
 
+    // OAuth is opt-in: unset `oauth_issuer_url` reproduces today's
+    // unauthenticated behavior exactly. But the half-configured state
+    // (issuer without a public URL to advertise/audience-check against) is
+    // never useful, so refuse to boot rather than silently running
+    // unprotected.
+    let oauth_issuer_url = config.oauth_issuer_url.clone();
+    let public_url = config.public_url.clone();
+    if oauth_issuer_url.is_some() && public_url.is_none() {
+        return Err(
+            "oauth_issuer_url is set but public_url is not; both are required together \
+                     (public_url is the canonical external URL of this server)"
+                .into(),
+        );
+    }
+
     tokio::runtime::Runtime::new()?.block_on(async {
         use rmcp::transport::streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
@@ -493,8 +510,30 @@ fn run_serve_http(port: u16) -> Result<(), Box<dyn std::error::Error>> {
             mcp_config,
         );
 
-        let router = nom_core::operation::http_router::build_http_router(registry)
-            .nest_service("/mcp", mcp_service)
+        let mut mcp_route = axum::Router::new().nest_service("/mcp", mcp_service);
+        let mut router = nom_core::operation::http_router::build_http_router(registry);
+
+        if let Some(issuer) = &oauth_issuer_url {
+            let public_url = public_url.as_deref().expect("checked above");
+            let oauth_state = oauth::OAuthState::discover(issuer, public_url)
+                .await
+                .map_err(|e| format!("OAuth setup failed (issuer {issuer}): {e}"))?;
+            mcp_route = mcp_route.layer(axum::middleware::from_fn_with_state(
+                oauth_state.clone(),
+                oauth::require_bearer_token,
+            ));
+            let metadata_route = axum::Router::new()
+                .route(
+                    "/.well-known/oauth-protected-resource",
+                    axum::routing::get(oauth::metadata_handler),
+                )
+                .with_state(oauth_state);
+            router = router.merge(metadata_route);
+            tracing::info!(%issuer, %public_url, "MCP OAuth resource-server protection enabled on /mcp");
+        }
+
+        let router = router
+            .merge(mcp_route)
             .layer(axum::middleware::from_fn(debug_log_mcp_request));
 
         let addr = resolve_bind_addr(&bind_address, port)?;

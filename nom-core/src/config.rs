@@ -112,6 +112,21 @@ pub struct AppConfig {
 
     #[serde(default)]
     pub remote: RemoteConfig,
+
+    /// Issuer URL of the OAuth 2.1 authorization server (e.g. an Authelia
+    /// instance) that mints access tokens for this MCP server. When unset,
+    /// HTTP serve mode accepts every request unauthenticated, exactly as
+    /// before OAuth support existed.
+    #[serde(default)]
+    pub oauth_issuer_url: Option<String>,
+
+    /// Canonical external URL this server is reachable at once behind a
+    /// reverse proxy (e.g. `https://nom.example.com`). Required whenever
+    /// `oauth_issuer_url` is set: it's both the `resource` advertised in
+    /// OAuth Protected Resource Metadata and the expected access-token
+    /// audience.
+    #[serde(default)]
+    pub public_url: Option<String>,
 }
 
 fn default_http_bind_address() -> String {
