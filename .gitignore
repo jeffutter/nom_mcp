@@ -6,4 +6,7 @@ target/
 # Nix build artifacts
 result
 
+# Local-only design reference (user decision: never commit)
+/docs/widget-design-reference-goals-cards.png
+
 .pi/ralph/
