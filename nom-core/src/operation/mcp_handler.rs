@@ -84,23 +84,37 @@ const WEEKLY_SUMMARY_TTL_MS: u64 = 60_000; // 1 minute
 /// Build the `_meta.ui` object that points a Tool declaration at
 /// [`GOAL_PROGRESS_UI_RESOURCE_URI`], per the MCP Apps extension
 /// (SEP-1865 / modelcontextprotocol/ext-apps spec 2026-01-26).
-fn goal_progress_ui_meta() -> rmcp::model::MetaObject {
-    ui_meta(GOAL_PROGRESS_UI_RESOURCE_URI)
+///
+/// `domain` (the host's sandbox origin, e.g.
+/// `{hash}.claudemcpcontent.com`) is included only when configured — it is
+/// optional per spec, and a subtly wrong value has been reported to break
+/// rendering even on web, so it must never be emitted unless explicitly set
+/// (TASK-53).
+fn goal_progress_ui_meta(domain: Option<&str>) -> rmcp::model::MetaObject {
+    ui_meta(GOAL_PROGRESS_UI_RESOURCE_URI, domain)
 }
 
 /// Build the `_meta.ui` object that points a Tool declaration at
 /// [`WEEKLY_PROGRESS_UI_RESOURCE_URI`], per the MCP Apps extension
 /// (SEP-1865 / modelcontextprotocol/ext-apps spec 2026-01-26).
-fn weekly_progress_ui_meta() -> rmcp::model::MetaObject {
-    ui_meta(WEEKLY_PROGRESS_UI_RESOURCE_URI)
+///
+/// See [`goal_progress_ui_meta`] for the `domain` caveat.
+fn weekly_progress_ui_meta(domain: Option<&str>) -> rmcp::model::MetaObject {
+    ui_meta(WEEKLY_PROGRESS_UI_RESOURCE_URI, domain)
 }
 
-fn ui_meta(resource_uri: &str) -> rmcp::model::MetaObject {
+fn ui_meta(resource_uri: &str, domain: Option<&str>) -> rmcp::model::MetaObject {
     let mut ui = serde_json::Map::new();
     ui.insert(
         "resourceUri".to_string(),
         serde_json::Value::String(resource_uri.to_string()),
     );
+    if let Some(domain) = domain {
+        ui.insert(
+            "domain".to_string(),
+            serde_json::Value::String(domain.to_string()),
+        );
+    }
     let mut meta = serde_json::Map::new();
     meta.insert("ui".to_string(), serde_json::Value::Object(ui));
     meta.into()
@@ -115,6 +129,11 @@ fn ui_meta(resource_uri: &str) -> rmcp::model::MetaObject {
 pub struct McpHandler {
     registry: Arc<OperationRegistry>,
     clock: Clock,
+    /// Optional MCP Apps UI sandbox origin domain emitted as `_meta.ui.domain`
+    /// on widget tool declarations and `ui://` resource-read contents. When
+    /// `None` the field is omitted entirely and hosts use their default
+    /// sandbox origin (TASK-53).
+    ui_domain: Option<String>,
     #[cfg(test)]
     db_path: Option<std::path::PathBuf>,
 }
@@ -124,9 +143,22 @@ impl McpHandler {
         Self {
             registry,
             clock,
+            ui_domain: None,
             #[cfg(test)]
             db_path: None,
         }
+    }
+
+    /// Set the optional MCP Apps UI sandbox origin domain (`_meta.ui.domain`).
+    ///
+    /// Deployment-specific — it depends on the exact URL string registered
+    /// with the host (Claude's pattern is the first 32 hex chars of
+    /// `sha256(endpoint)` plus `.claudemcpcontent.com`) — so it comes from
+    /// config (`AppConfig::ui_domain`) rather than being baked into the
+    /// binary. Pass `None` to omit the field (the default, and always safe).
+    pub fn with_ui_domain(mut self, domain: Option<String>) -> Self {
+        self.ui_domain = domain;
+        self
     }
 
     #[cfg(test)]
@@ -201,10 +233,11 @@ impl McpHandler {
         };
 
         if widget_display_enabled {
+            let domain = self.ui_domain.as_deref();
             for tool in tools.iter_mut() {
                 match tool.name.as_ref() {
-                    "get_goal_progress" => tool.meta = Some(goal_progress_ui_meta()),
-                    "get_weekly_progress" => tool.meta = Some(weekly_progress_ui_meta()),
+                    "get_goal_progress" => tool.meta = Some(goal_progress_ui_meta(domain)),
+                    "get_weekly_progress" => tool.meta = Some(weekly_progress_ui_meta(domain)),
                     _ => {}
                 }
             }
@@ -236,6 +269,16 @@ impl McpHandler {
                 .with_description("Interactive weekly progress widget (MCP Apps UI)")
                 .with_mime_type("text/html;profile=mcp-app"),
         ]
+    }
+
+    /// Build the `_meta` object attached to a `ui://` resource-read contents
+    /// entry: the same `ui.resourceUri` pointer as the tool declaration, plus
+    /// `ui.domain` when configured. Hosts may read UI metadata from the read
+    /// result's contents rather than only from the tool declaration (per the
+    /// MCP Apps spec and ext-apps PR #410), so both surfaces carry the same
+    /// shape (TASK-53).
+    fn ui_contents_meta(&self, resource_uri: &str) -> rmcp::model::MetaObject {
+        ui_meta(resource_uri, self.ui_domain.as_deref())
     }
 
     /// Dispatch a resource read by URI, fetching and serializing the
@@ -312,7 +355,7 @@ impl McpHandler {
                     uri: uri.to_string(),
                     mime_type: Some("text/html;profile=mcp-app".to_string()),
                     text: GOAL_PROGRESS_WIDGET_HTML.to_string(),
-                    meta: None,
+                    meta: Some(self.ui_contents_meta(uri)),
                 };
                 Ok(ReadResourceResult::new(vec![contents])
                     .with_ttl_ms(WIDGET_HTML_TTL_MS)
@@ -324,7 +367,7 @@ impl McpHandler {
                     uri: uri.to_string(),
                     mime_type: Some("text/html;profile=mcp-app".to_string()),
                     text: WEEKLY_PROGRESS_WIDGET_HTML.to_string(),
-                    meta: None,
+                    meta: Some(self.ui_contents_meta(uri)),
                 };
                 Ok(ReadResourceResult::new(vec![contents])
                     .with_ttl_ms(WIDGET_HTML_TTL_MS)
@@ -946,5 +989,150 @@ mod tests {
             serde_json::to_string(&result_before).unwrap(),
             serde_json::to_string(&result_after).unwrap(),
         );
+    }
+
+    /// TASK-53: `ui_meta` omits `domain` by default and includes it only when
+    /// configured — a subtly wrong value has been reported to break rendering
+    /// even on web, so the field must never be emitted unless explicitly set.
+    #[test]
+    fn test_ui_meta_domain_optional() {
+        let without = ui_meta(GOAL_PROGRESS_UI_RESOURCE_URI, None);
+        assert_eq!(
+            without.0.get("ui").and_then(|ui| ui.get("resourceUri")),
+            Some(&serde_json::Value::String(
+                GOAL_PROGRESS_UI_RESOURCE_URI.to_string()
+            ))
+        );
+        assert!(
+            without.0.get("ui").unwrap().get("domain").is_none(),
+            "domain must be absent when not configured"
+        );
+
+        let with = ui_meta(
+            GOAL_PROGRESS_UI_RESOURCE_URI,
+            Some("ccedd2f0677de1b05856b55902232949.claudemcpcontent.com"),
+        );
+        assert_eq!(
+            with.0.get("ui").and_then(|ui| ui.get("domain")),
+            Some(&serde_json::Value::String(
+                "ccedd2f0677de1b05856b55902232949.claudemcpcontent.com".to_string()
+            ))
+        );
+    }
+
+    /// TASK-53: with `ui_domain` configured, `resources/read` for a widget URI
+    /// attaches `_meta.ui` (resourceUri + domain) to the contents entry.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_dispatch_read_resource_widget_contents_meta_with_domain() {
+        let clock = Clock { tz: chrono_tz::UTC };
+        let handler = McpHandler::new(Arc::new(OperationRegistry::new(make_clock())), clock)
+            .with_ui_domain(Some(
+                "ccedd2f0677de1b05856b55902232949.claudemcpcontent.com".to_string(),
+            ));
+
+        let result = handler
+            .dispatch_read_resource(GOAL_PROGRESS_UI_RESOURCE_URI)
+            .await
+            .unwrap();
+        let ReadResourceResult { contents, .. } = result;
+        let ResourceContents::TextResourceContents { meta, .. } = &contents[0] else {
+            panic!("expected text contents")
+        };
+        let ui = meta
+            .as_ref()
+            .expect("meta should be set on widget contents")
+            .0
+            .get("ui")
+            .cloned()
+            .expect("_meta.ui should be present");
+        assert_eq!(
+            ui.get("resourceUri"),
+            Some(&serde_json::Value::String(
+                GOAL_PROGRESS_UI_RESOURCE_URI.to_string()
+            ))
+        );
+        assert_eq!(
+            ui.get("domain"),
+            Some(&serde_json::Value::String(
+                "ccedd2f0677de1b05856b55902232949.claudemcpcontent.com".to_string()
+            ))
+        );
+    }
+
+    /// Same as above but with `ui_domain` unset: the contents entry still
+    /// carries `_meta.ui.resourceUri` (always known, always correct), but the
+    /// `domain` key must be absent — omission is spec-valid and avoids
+    /// emitting a value that could turn out to be wrong.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_dispatch_read_resource_widget_contents_meta_absent_without_domain() {
+        let clock = Clock { tz: chrono_tz::UTC };
+        let handler = McpHandler::new(Arc::new(OperationRegistry::new(make_clock())), clock);
+
+        let result = handler
+            .dispatch_read_resource(WEEKLY_PROGRESS_UI_RESOURCE_URI)
+            .await
+            .unwrap();
+        let ReadResourceResult { contents, .. } = result;
+        let ResourceContents::TextResourceContents { meta, .. } = &contents[0] else {
+            panic!("expected text contents")
+        };
+        let ui = meta
+            .as_ref()
+            .expect("meta should carry the resourceUri pointer")
+            .0
+            .get("ui")
+            .cloned()
+            .expect("_meta.ui should be present");
+        assert_eq!(
+            ui.get("resourceUri"),
+            Some(&serde_json::Value::String(
+                WEEKLY_PROGRESS_UI_RESOURCE_URI.to_string()
+            ))
+        );
+        assert!(
+            ui.get("domain").is_none(),
+            "domain must be absent when not configured"
+        );
+    }
+
+    /// TASK-53: with `ui_domain` configured and widget display enabled, the
+    /// gated `tools/list` `_meta.ui` includes `domain` alongside resourceUri.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_list_tools_ui_meta_includes_configured_domain() {
+        let db = TempDb::new().await;
+
+        let set_widget = crate::widget::SetWidgetDisplay::new().with_db_path(db.path.clone());
+        set_widget
+            .execute_json(Arc::new(serde_json::json!({ "enabled": true })))
+            .await
+            .unwrap();
+
+        let handler = handler_with_goal_progress(db.path.clone())
+            .with_ui_domain(Some("abc123def456.claudemcpcontent.com".to_string()));
+        let tools = handler.build_tools_gated().await;
+
+        for name in ["get_goal_progress", "get_weekly_progress"] {
+            let tool = tools
+                .iter()
+                .find(|t| t.name.as_ref() == name)
+                .unwrap_or_else(|| panic!("{name} should be registered"));
+            let ui = tool
+                .meta
+                .as_ref()
+                .expect("meta should be set")
+                .0
+                .get("ui")
+                .cloned()
+                .expect("_meta.ui should be present");
+            assert_eq!(
+                ui.get("domain"),
+                Some(&serde_json::Value::String(
+                    "abc123def456.claudemcpcontent.com".to_string()
+                ))
+            );
+        }
     }
 }

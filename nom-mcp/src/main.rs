@@ -226,7 +226,8 @@ fn run_serve_stdio() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = AppConfig::load()?;
     let (clock, registry) = build_serve_context(&config)?;
-    let handler = nom_core::operation::mcp_handler::McpHandler::new(registry, *clock);
+    let handler = nom_core::operation::mcp_handler::McpHandler::new(registry, *clock)
+        .with_ui_domain(config.ui_domain.clone());
 
     tokio::runtime::Runtime::new()?.block_on(async {
         use rmcp::ServiceExt;
@@ -476,7 +477,8 @@ fn run_serve_http(port: u16) -> Result<(), Box<dyn std::error::Error>> {
 
     let config = AppConfig::load()?;
     let (clock, registry) = build_serve_context(&config)?;
-    let handler = nom_core::operation::mcp_handler::McpHandler::new(registry.clone(), *clock);
+    let handler = nom_core::operation::mcp_handler::McpHandler::new(registry.clone(), *clock)
+        .with_ui_domain(config.ui_domain.clone());
     let bind_address = config.http_bind_address.clone();
 
     tokio::runtime::Runtime::new()?.block_on(async {

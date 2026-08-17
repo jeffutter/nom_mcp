@@ -110,6 +110,18 @@ pub struct AppConfig {
     #[serde(default = "default_off_user_agent")]
     pub off_user_agent: String,
 
+    /// Optional MCP Apps UI sandbox origin domain (e.g.
+    /// `ccedd2f0677de1b05856b55902232949.claudemcpcontent.com`) emitted as
+    /// `_meta.ui.domain` on widget tool declarations and `ui://` resource-read
+    /// contents, pinning the host's sandbox origin instead of letting it mint
+    /// a default. Deployment-specific — it depends on the exact URL string
+    /// registered with the host (Claude's pattern is the first 32 hex chars of
+    /// `sha256(endpoint)` plus `.claudemcpcontent.com`) — so it is config
+    /// rather than baked into the binary (TASK-53). When unset, the field is
+    /// omitted entirely and hosts use their default origin.
+    #[serde(default)]
+    pub ui_domain: Option<String>,
+
     #[serde(default)]
     pub remote: RemoteConfig,
 }
@@ -333,6 +345,7 @@ mod tests {
         assert!(config.off_password.is_none());
         assert!(config.timezone.is_none());
         assert!(config.remote.server_url.is_none());
+        assert!(config.ui_domain.is_none());
     }
 
     #[serial_test::serial]
@@ -413,6 +426,23 @@ off_password = "toml-pass"
 
         let config = AppConfig::load().expect("should load");
         assert_eq!(config.off_app_uuid.as_deref(), Some("custom-uuid-value"));
+    }
+
+    #[serial_test::serial]
+    #[test]
+    fn test_ui_domain_from_env() {
+        let mut guard = TestGuard::new();
+        guard.set("XDG_CONFIG_HOME", "/tmp/nom_mcp_nonexistent_ui_domain");
+        guard.set(
+            "NOM_MCP_UI_DOMAIN",
+            "ccedd2f0677de1b05856b55902232949.claudemcpcontent.com",
+        );
+
+        let config = AppConfig::load().expect("should load");
+        assert_eq!(
+            config.ui_domain.as_deref(),
+            Some("ccedd2f0677de1b05856b55902232949.claudemcpcontent.com")
+        );
     }
 
     #[serial_test::serial]
