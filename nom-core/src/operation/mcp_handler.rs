@@ -5,6 +5,7 @@
 //! requires compile-time-associated-function types incompatible with
 //! `Vec<Arc<dyn Operation>>`.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use rmcp::{
@@ -13,8 +14,8 @@ use rmcp::{
     model::{
         CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
         ErrorCode, ExtensionCapabilities, Implementation, InitializeResult, ListResourcesResult,
-        ListToolsResult, PaginatedRequestParams, ReadResourceResponse, ReadResourceResult,
-        Resource, ResourceContents, ServerCapabilities, Tool,
+        ListToolsResult, PaginatedRequestParams, ProtocolVersion, ReadResourceResponse,
+        ReadResourceResult, Resource, ResourceContents, ServerCapabilities, Tool,
     },
     service::{NotificationContext, RequestContext},
 };
@@ -393,6 +394,32 @@ impl ServerHandler for McpHandler {
             .build();
         InitializeResult::new(capabilities)
             .with_server_info(Implementation::new("nom-mcp", env!("CARGO_PKG_VERSION")))
+    }
+
+    /// Extend rmcp's known protocol revisions with the MCP Apps spec
+    /// revision (`2026-01-26`).
+    ///
+    /// Claude's backend relay opens a dedicated streamable-HTTP session for
+    /// widget loading and initializes it with `protocolVersion:
+    /// "2026-01-26"` plus the `io.modelcontextprotocol/ui` capability. rmcp
+    /// does not know that revision, so by default it downgrades its echo to
+    /// `2025-11-25`; the relay treats the downgrade as a failed handshake
+    /// and abandons the widget load ("Failed to load the MCP app. Unable to
+    /// connect to server"), never issuing the follow-up `resources/read`.
+    /// Echoing the requested revision keeps the session alive; the only
+    /// subsequent traffic such sessions need is standard `resources/read`,
+    /// which we serve identically across revisions.
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        let apps_revision: ProtocolVersion =
+            serde_json::from_str(r#""2026-01-26""#).expect("literal protocol revision string");
+        Cow::Owned(vec![
+            ProtocolVersion::V_2024_11_05,
+            ProtocolVersion::V_2025_03_26,
+            ProtocolVersion::V_2025_06_18,
+            ProtocolVersion::V_2025_11_25,
+            ProtocolVersion::V_2026_07_28,
+            apps_revision,
+        ])
     }
 
     /// TEMPORARY debug logging (investigating widget loading on Claude iOS):
