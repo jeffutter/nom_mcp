@@ -4,7 +4,7 @@ title: Diagnose iOS widget-load "unknown error" after successful _meta.ui discov
 status: In Progress
 assignee: []
 created_date: '2026-08-16 23:37'
-updated_date: '2026-08-17 04:20'
+updated_date: '2026-08-17 14:40'
 labels: []
 dependencies: []
 priority: high
@@ -53,5 +53,20 @@ created: 2026-08-17 04:20
 
 **Deploy note for user.** Add to the secrets-render source behind `/run/secrets/rendered/nom-mcp.env` (file is re-rendered each deploy — manual edits don't survive):
 `NOM_MCP_UI_DOMAIN=ccedd2f0677de1b05856b55902232949.claudemcpcontent.com` (primary: the origin Claude itself minted/served for us on web). Fallbacks, no release needed — one-line change + service restart: computed `403303330a52bde603a808b90b7dc135.claudemcpcontent.com`, or remove the line entirely (field omitted, host default origin).
+---
+
+created: 2026-08-17 14:40
+---
+## 2026-08-17 ~11:30 UTC — domain experiment CONCLUDED (inert for iOS); pivoting to upstream report
+
+**v0.5.4 live** (store path ryy0hhz3..., ExecStart 0.5.4). User chose the COMPUTED hash `403303330a52bde603a808b90b7dc135.claudemcpcontent.com` for NOM_MCP_UI_DOMAIN; production probe confirms both gated tools/list AND resources/read contents emit `{domain, resourceUri}`.
+
+**Web re-test (~11:09 UTC): PASSES with domain set.** Stateless Claude-User burst: server/discover → resources/list → tools/list → resources/read:ui://nom-mcp/goal-progress, all 200 (client_name=claude-ai, header protocol 2026-07-28). Widget rendered.
+
+**iOS re-test (10:29:13 UTC): SAME FAILURE, now with domain pinned.** Fresh session 9c8ef666: initialize @2026-01-26 + io.modelcontextprotocol/ui extension → 200 + echoed version + Mcp-Session-Id; notifications/initialized at 10:29:25 → 202; then ZERO requests from that session ever. Banner: 'Failed to load the MCP app. Unable to connect to server' (same variant as v0.5.3 era). Proxy: everything 200. Verdict: `_meta.ui.domain` pinning is INERT for iOS — the loader dies between init and fetch regardless. Server-side levers exhausted (session persistence ✓, gating removed ✓, protocol echo ✓, resources/list ui:// entries ✓, domain pin ✗).
+
+**Re-gate claude-ios ruled out INFEASIBLE:** the stateless discovery channel (where the app learns about widgets) is anonymous — clientInfo.name is only known inside the session-based widget-loader initialize, i.e. after the attempt has already started. Hiding _meta.ui there can't prevent the attempt; hiding it on stateless would break web too. This is also why the original 81d32ff gate never fully worked.
+
+**Decisions:** (1) USER ACTION PENDING: unset NOM_MCP_UI_DOMAIN (remove line from render source + service restart) — revert to field-omitted (spec default; Todoist parity; removes opaque variable). (2) Upstream report drafted: `docs/ios-widget-upstream-report.md` — full evidence chain (Case A fresh-session silence, Case B successful-read-still-fails, web control), five ruled-out layers, and three concrete asks incl. relay logs for session 9c8ef666-24cd-4994-a772-3a27cda5866f. File against anthropics/claude-ai-mcp#40 (ochafik active there) or a fresh issue. (3) Optional future datapoint: user tries a known-working third-party widget (Todoist) on their Claude iOS to establish app-wide vs our-server scope. **TASK-51 (debug middleware removal) stays OPEN** — the tracing lines remain valuable while the Anthropic thread is active.
 ---
 <!-- COMMENTS:END -->
