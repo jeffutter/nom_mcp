@@ -18,6 +18,7 @@ This project uses Backlog.md MCP for all task and project management activities.
 - **When to read it**: BEFORE creating tasks, or when you're unsure whether to track work
 
 These guides cover:
+
 - Decision framework for when to create tasks
 - Search-first workflow to avoid duplicates
 - Links to detailed guides for task creation, execution, and finalization
@@ -75,6 +76,17 @@ cargo run -p nom-mcp --bin nom-mcp -- serve http --port 8000
 ```
 
 The `nom-core/tests/lock_probe_integration.rs` integration test spawns the `lock_holder` helper binary (`nom-core/src/lock_holder.rs`) via `CARGO_BIN_EXE_lock_holder`; only Cargo's own integration-test harness sets that env var, so that test must stay an integration test rather than move into the lib's `#[cfg(test)]` modules.
+
+### Releases & deployment
+
+Releases use `cargo release` with a clean working tree (any uncommitted or untracked file blocks it — move strays like stray log files out of the tree first). Never publish to crates.io:
+
+```sh
+cargo release patch --workspace --no-publish --no-confirm --execute   # or minor/major
+git push && git push --tags
+```
+
+The bump commit + tag `vX.Y.Z` is pushed to origin (GitHub); a GitHub Action builds the new version (~5 min) and deploys it to the homelab production service. No manual deploy steps are needed — after the action completes, verify the live version via `systemctl status nom-mcp` on the homelab (the `ExecStart` store path changes per build).
 
 ## Architecture
 
