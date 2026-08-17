@@ -25,10 +25,12 @@ use crate::storage::Connection;
 
 /// URI of the MCP Apps UI resource for `get_goal_progress`'s widget.
 ///
-/// Not listed in `build_resources()`/`list_resources()` — per the MCP Apps
-/// spec, UI-only resources are discovered via the tool's own
-/// `_meta.ui.resourceUri` (see `goal_progress_ui_meta`), not the general
-/// resource listing.
+/// Primary discovery is via the tool's own `_meta.ui.resourceUri` (see
+/// `goal_progress_ui_meta`). The MCP Apps spec also permits servers to omit
+/// UI-only resources from `resources/list`, but we list it anyway (see
+/// `build_resources`) because at least one observed host (Claude iOS) never
+/// issues `resources/read` when the URI is absent from its cached resource
+/// listing, even though the tool declaration carries `_meta.ui`.
 const GOAL_PROGRESS_UI_RESOURCE_URI: &str = "ui://nom-mcp/goal-progress";
 
 /// MCP Apps extension identifier (SEP-1865 / SEP-1724 extension mechanism),
@@ -50,7 +52,7 @@ const GOAL_PROGRESS_WIDGET_HTML: &str = include_str!("../../assets/goal_progress
 
 /// URI of the MCP Apps UI resource for `get_weekly_progress`'s widget.
 ///
-/// Not listed in `build_resources()`/`list_resources()`, same rationale as
+/// Listed in `build_resources()`, same rationale as
 /// [`GOAL_PROGRESS_UI_RESOURCE_URI`].
 const WEEKLY_PROGRESS_UI_RESOURCE_URI: &str = "ui://nom-mcp/weekly-progress";
 
@@ -211,12 +213,27 @@ impl McpHandler {
     }
 
     /// Build the list of MCP resources this handler exposes.
+    ///
+    /// The two `ui://` widgets are listed even though the MCP Apps spec
+    /// allows omitting UI-only resources from `resources/list` (discovery is
+    /// primarily via each tool's `_meta.ui.resourceUri`): some hosts
+    /// cross-check a tool's `resourceUri` against the resource listing before
+    /// issuing `resources/read`, and the spec's stated benefits include UI
+    /// resources being enumerable and inspectable.
     pub(crate) fn build_resources(&self) -> Vec<Resource> {
         vec![
             Resource::new("nom://weekly-summary", "weekly-summary")
                 .with_title("Weekly Summary")
                 .with_description("Rolling 7-day nutrition and weight summary")
                 .with_mime_type("application/json"),
+            Resource::new(GOAL_PROGRESS_UI_RESOURCE_URI, "goal_progress")
+                .with_title("Goal Progress")
+                .with_description("Interactive daily goal-progress widget (MCP Apps UI)")
+                .with_mime_type("text/html;profile=mcp-app"),
+            Resource::new(WEEKLY_PROGRESS_UI_RESOURCE_URI, "weekly_progress")
+                .with_title("Weekly Progress")
+                .with_description("Interactive weekly progress widget (MCP Apps UI)")
+                .with_mime_type("text/html;profile=mcp-app"),
         ]
     }
 
@@ -649,14 +666,26 @@ mod tests {
     }
 
     #[test]
-    fn test_build_resources_lists_weekly_summary() {
+    fn test_build_resources_lists_all_resources() {
         let clock = Clock { tz: chrono_tz::UTC };
         let handler = McpHandler::new(Arc::new(OperationRegistry::new(make_clock())), clock);
         let resources = handler.build_resources();
-        assert_eq!(resources.len(), 1);
+        assert_eq!(resources.len(), 3);
         assert_eq!(resources[0].uri, "nom://weekly-summary");
         assert_eq!(resources[0].title.as_deref(), Some("Weekly Summary"));
         assert_eq!(resources[0].mime_type.as_deref(), Some("application/json"));
+        assert_eq!(resources[1].uri, GOAL_PROGRESS_UI_RESOURCE_URI);
+        assert_eq!(resources[1].title.as_deref(), Some("Goal Progress"));
+        assert_eq!(
+            resources[1].mime_type.as_deref(),
+            Some("text/html;profile=mcp-app")
+        );
+        assert_eq!(resources[2].uri, WEEKLY_PROGRESS_UI_RESOURCE_URI);
+        assert_eq!(resources[2].title.as_deref(), Some("Weekly Progress"));
+        assert_eq!(
+            resources[2].mime_type.as_deref(),
+            Some("text/html;profile=mcp-app")
+        );
     }
 
     #[serial_test::serial]
