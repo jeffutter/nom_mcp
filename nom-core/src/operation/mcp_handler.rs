@@ -134,6 +134,12 @@ pub struct McpHandler {
     /// `None` the field is omitted entirely and hosts use their default
     /// sandbox origin (TASK-53).
     ui_domain: Option<String>,
+    /// Client names (MCP `initialize`'s `clientInfo.name`) for which the
+    /// widget tools' `_meta.ui` pointers are hidden from `tools/list`, so
+    /// those clients fall back to plain text results instead of attempting
+    /// to load UI they cannot render (TASK-53). Case-insensitive matching;
+    /// empty = block nothing.
+    ui_blocked_clients: Vec<String>,
     #[cfg(test)]
     db_path: Option<std::path::PathBuf>,
 }
@@ -144,6 +150,7 @@ impl McpHandler {
             registry,
             clock,
             ui_domain: None,
+            ui_blocked_clients: Vec::new(),
             #[cfg(test)]
             db_path: None,
         }
@@ -158,6 +165,17 @@ impl McpHandler {
     /// binary. Pass `None` to omit the field (the default, and always safe).
     pub fn with_ui_domain(mut self, domain: Option<String>) -> Self {
         self.ui_domain = domain;
+        self
+    }
+
+    /// Set the list of client names (MCP `initialize`'s `clientInfo.name`)
+    /// for which the widget tools' `_meta.ui` pointers are hidden from
+    /// `tools/list`, so those clients fall back to plain text results
+    /// instead of attempting to load UI they cannot render (TASK-53).
+    /// Sourced from config (`AppConfig::ui_blocked_clients`); matching is
+    /// case-insensitive; an empty list blocks nothing (default).
+    pub fn with_ui_blocked_clients(mut self, clients: Vec<String>) -> Self {
+        self.ui_blocked_clients = clients;
         self
     }
 
@@ -189,18 +207,24 @@ impl McpHandler {
 
     /// Build the tool list, additionally gating `get_goal_progress`'s and
     /// `get_weekly_progress`'s MCP Apps `_meta.ui` pointers on the shared
-    /// widget-display setting (TASK-41).
+    /// widget-display setting (TASK-41) and on the requesting client not
+    /// being in the configured blocklist (`ui_blocked_clients`, TASK-53).
     ///
-    /// Kept as a plain inherent method (mirroring `build_tools`/
-    /// `dispatch_read_resource`) so tests can call it directly without
-    /// constructing a `RequestContext<RoleServer>`.
+    /// `requesting_client_name` takes a bare `Option<&str>` rather than the
+    /// `RequestContext<RoleServer>` it's ultimately sourced from (mirroring
+    /// `build_tools`/`dispatch_read_resource`) so tests can call it directly
+    /// without constructing one. Stateless requests carry no identity
+    /// (`None`) and are never blocked.
     ///
     /// The widget-display setting is a cosmetic nicety, not a prerequisite
     /// for tool discovery: any failure opening the DB or reading the
     /// setting is treated the same as "no settings row" (gating disabled),
     /// logged and otherwise ignored, so a DB hiccup never removes tools
     /// from `tools/list`.
-    pub(crate) async fn build_tools_gated(&self) -> Vec<Tool> {
+    pub(crate) async fn build_tools_gated(
+        &self,
+        requesting_client_name: Option<&str>,
+    ) -> Vec<Tool> {
         let mut tools = self.build_tools();
 
         #[cfg(test)]
@@ -232,7 +256,9 @@ impl McpHandler {
             }
         };
 
-        if widget_display_enabled {
+        let client_blocked = self.ui_client_blocked(requesting_client_name);
+
+        if widget_display_enabled && !client_blocked {
             let domain = self.ui_domain.as_deref();
             for tool in tools.iter_mut() {
                 match tool.name.as_ref() {
@@ -241,9 +267,27 @@ impl McpHandler {
                     _ => {}
                 }
             }
+        } else if widget_display_enabled {
+            tracing::debug!(
+                ?requesting_client_name,
+                "tools/list: suppressing _meta.ui for blocked client"
+            );
         }
 
         tools
+    }
+
+    /// Whether the requesting client is in the configured blocklist
+    /// (case-insensitive, whitespace-trimmed). Stateless requests carry no
+    /// identity (`None`) and are never blocked.
+    fn ui_client_blocked(&self, client_name: Option<&str>) -> bool {
+        match client_name {
+            Some(name) => self
+                .ui_blocked_clients
+                .iter()
+                .any(|blocked| blocked.trim().eq_ignore_ascii_case(name.trim())),
+            None => false,
+        }
     }
 
     /// Build the list of MCP resources this handler exposes.
@@ -494,13 +538,17 @@ impl ServerHandler for McpHandler {
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let tools = self.build_tools_gated().await;
+        // Session-based requests carry the `initialize` identity; stateless
+        // relay requests do not (None → nothing is blocked).
+        let client_name = context.client_info().map(|info| info.name);
+        let tools = self.build_tools_gated(client_name.as_deref()).await;
         // TEMPORARY debug logging (investigating widget loading on Claude
         // iOS): how many tools carry `_meta.ui` in this response.
         tracing::debug!(
             ui_meta_tool_count = tools.iter().filter(|t| t.meta.is_some()).count(),
+            ?client_name,
             "tools/list: widget gating decision"
         );
         Ok(ListToolsResult::with_all_items(tools)
@@ -816,7 +864,7 @@ mod tests {
         let db = TempDb::new().await;
         let handler = handler_with_goal_progress(db.path.clone());
 
-        let tools = handler.build_tools_gated().await;
+        let tools = handler.build_tools_gated(None).await;
 
         for name in ["get_goal_progress", "get_weekly_progress"] {
             let tool = tools
@@ -849,7 +897,7 @@ mod tests {
             .unwrap();
 
         let handler = handler_with_goal_progress(db.path.clone());
-        let tools = handler.build_tools_gated().await;
+        let tools = handler.build_tools_gated(None).await;
 
         for (name, uri) in [
             ("get_goal_progress", GOAL_PROGRESS_UI_RESOURCE_URI),
@@ -875,6 +923,52 @@ mod tests {
         assert!(test_op.meta.is_none());
     }
 
+    /// TASK-53: a client whose `initialize` name is in the configured
+    /// blocklist sees no `_meta.ui` on the widget tools even with widget
+    /// display enabled — it falls back to plain text results instead of
+    /// attempting to load UI it cannot render. Matching is case-insensitive;
+    /// unblocked named clients and unidentified (stateless) requests are
+    /// unaffected.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_build_tools_gated_suppresses_ui_for_blocked_client() {
+        let db = TempDb::new().await;
+
+        let set_widget = crate::widget::SetWidgetDisplay::new().with_db_path(db.path.clone());
+        set_widget
+            .execute_json(Arc::new(serde_json::json!({ "enabled": true })))
+            .await
+            .unwrap();
+
+        let handler = handler_with_goal_progress(db.path.clone())
+            .with_ui_blocked_clients(vec!["claude-ios".to_string()]);
+
+        let widget_tools = ["get_goal_progress", "get_weekly_progress"];
+
+        // Blocked client (exact and case-differing forms): no _meta.ui.
+        for name in [Some("claude-ios"), Some("CLAUDE-IOS")] {
+            let tools = handler.build_tools_gated(name).await;
+            for tool in tools
+                .iter()
+                .filter(|t| widget_tools.iter().any(|w| t.name == *w))
+            {
+                assert!(tool.meta.is_none(), "{name:?} should be blocked");
+            }
+        }
+
+        // Unblocked named client and unidentified (stateless) request:
+        // _meta.ui present.
+        for name in [Some("claude-ai"), None] {
+            let tools = handler.build_tools_gated(name).await;
+            for tool in tools
+                .iter()
+                .filter(|t| widget_tools.iter().any(|w| t.name == *w))
+            {
+                assert!(tool.meta.is_some(), "{name:?} should not be blocked");
+            }
+        }
+    }
+
     /// TASK-44: a DB-open failure while resolving the widget-display
     /// setting must not take down `tools/list` for every other tool — it
     /// should be treated exactly like "no settings row" (gating disabled).
@@ -891,7 +985,7 @@ mod tests {
         let bad_db_path = blocking_file.join("unreachable.db");
 
         let handler = handler_with_goal_progress(bad_db_path);
-        let tools = handler.build_tools_gated().await;
+        let tools = handler.build_tools_gated(None).await;
 
         let goal_progress = tools
             .iter()
@@ -1112,7 +1206,7 @@ mod tests {
 
         let handler = handler_with_goal_progress(db.path.clone())
             .with_ui_domain(Some("abc123def456.claudemcpcontent.com".to_string()));
-        let tools = handler.build_tools_gated().await;
+        let tools = handler.build_tools_gated(None).await;
 
         for name in ["get_goal_progress", "get_weekly_progress"] {
             let tool = tools

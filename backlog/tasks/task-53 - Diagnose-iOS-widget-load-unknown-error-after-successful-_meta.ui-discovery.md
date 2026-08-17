@@ -4,7 +4,7 @@ title: Diagnose iOS widget-load "unknown error" after successful _meta.ui discov
 status: In Progress
 assignee: []
 created_date: '2026-08-16 23:37'
-updated_date: '2026-08-17 14:40'
+updated_date: '2026-08-17 15:58'
 labels: []
 dependencies: []
 priority: high
@@ -68,5 +68,20 @@ created: 2026-08-17 14:40
 **Re-gate claude-ios ruled out INFEASIBLE:** the stateless discovery channel (where the app learns about widgets) is anonymous — clientInfo.name is only known inside the session-based widget-loader initialize, i.e. after the attempt has already started. Hiding _meta.ui there can't prevent the attempt; hiding it on stateless would break web too. This is also why the original 81d32ff gate never fully worked.
 
 **Decisions:** (1) USER ACTION PENDING: unset NOM_MCP_UI_DOMAIN (remove line from render source + service restart) — revert to field-omitted (spec default; Todoist parity; removes opaque variable). (2) Upstream report drafted: `docs/ios-widget-upstream-report.md` — full evidence chain (Case A fresh-session silence, Case B successful-read-still-fails, web control), five ruled-out layers, and three concrete asks incl. relay logs for session 9c8ef666-24cd-4994-a772-3a27cda5866f. File against anthropics/claude-ai-mcp#40 (ochafik active there) or a fresh issue. (3) Optional future datapoint: user tries a known-working third-party widget (Todoist) on their Claude iOS to establish app-wide vs our-server scope. **TASK-51 (debug middleware removal) stays OPEN** — the tracing lines remain valuable while the Anthropic thread is active.
+---
+
+created: 2026-08-17 15:58
+---
+## 2026-08-17 ~15:40 UTC — configurable `_meta.ui` client blocklist (v0.5.5)
+
+Re-introduces the 81d32ff claude-ios exclusion as a CONFIGURABLE list instead of hardcoded, so future client breakage can be gated without a release cycle.
+
+**Design.** Gate is on `tools/list` only (mirrors 81d32ff; `resources/list` untouched). Matching key is session `clientInfo.name` from MCP `initialize`, case-insensitive + whitespace-trimmed. Stateless requests carry no identity (`None`) → never blocked, so web keeps working by construction. Blocklist empty = advertise to everyone (current behavior).
+
+**Implementation.** `AppConfig::ui_blocked_clients: Vec<String>` (env `NOM_MCP_UI_BLOCKED_CLIENTS=claude-ios,claude-android` comma-separated; TOML array also accepted via a lenient untagged deserializer — config-rs 0.15 does NOT split env strings into sequences natively, plain `Vec<String>` rejected the CSV form). `McpHandler::with_ui_blocked_clients(Vec<String>)` builder wired at both serve sites in main.rs; `build_tools_gated(Option<&str>)` now takes the requesting client name and skips attaching `_meta.ui` for blocked clients (debug log when suppressed). 3 new tests (env parse, sequence form, handler gating incl. case variants); gates green (fmt, clippy -D warnings, 311/311 nextest, doctests).
+
+**Local e2e (port 18766, isolated XDG):** widget display enabled via MCP tools/call; `claude-ios` and `CLAUDE-IOS` sessions → 0 widget tools with `_meta.ui`; `claude-ai` session → both widget tools advertise `_meta.ui` with correct resourceUri. Stateless path covered by unit test (no identity → not blocked).
+
+**Deploy note for user (v0.5.5).** In the secrets-render source behind /run/secrets/rendered/nom-mcp.env: REMOVE `NOM_MCP_UI_DOMAIN` (domain experiment concluded inert) and ADD `NOM_MCP_UI_BLOCKED_CLIENTS=claude-ios`. Effect: iOS app no longer learns widgets exist → text-only results, no 'Failed to load the MCP app' banner; web unaffected. List adjustable later (add/remove client names) without another release.
 ---
 <!-- COMMENTS:END -->

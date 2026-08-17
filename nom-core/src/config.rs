@@ -122,8 +122,47 @@ pub struct AppConfig {
     #[serde(default)]
     pub ui_domain: Option<String>,
 
+    /// Client names (the `clientInfo.name` reported during MCP
+    /// `initialize`) for which the MCP Apps `_meta.ui` pointers on widget
+    /// tool declarations are suppressed, so those clients never learn a
+    /// widget exists and fall back to plain text results instead of
+    /// attempting to load UI they cannot render (TASK-53; previously
+    /// hardcoded to `claude-ios` in 81d32ff, removed in 3ec7cce, now
+    /// configurable). Comma-separated via env var
+    /// (`NOM_MCP_UI_BLOCKED_CLIENTS=claude-ios`); a TOML array is also
+    /// accepted. Empty = block nothing.
+    #[serde(default, deserialize_with = "deserialize_ui_blocked_clients")]
+    pub ui_blocked_clients: Vec<String>,
+
     #[serde(default)]
     pub remote: RemoteConfig,
+}
+
+/// Accept a sequence (TOML array) or a comma-separated string (env var)
+/// for [`AppConfig::ui_blocked_clients`], trimming whitespace and dropping
+/// empty entries. config-rs's env source hands the raw string to the
+/// deserializer rather than splitting it, so plain `Vec<String>` would
+/// reject `NOM_MCP_UI_BLOCKED_CLIENTS=a,b`.
+fn deserialize_ui_blocked_clients<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        List(Vec<String>),
+        Csv(String),
+    }
+
+    Ok(match Repr::deserialize(deserializer)? {
+        Repr::List(values) => values,
+        Repr::Csv(raw) => raw
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(str::to_string)
+            .collect(),
+    })
 }
 
 fn default_http_bind_address() -> String {
@@ -346,6 +385,7 @@ mod tests {
         assert!(config.timezone.is_none());
         assert!(config.remote.server_url.is_none());
         assert!(config.ui_domain.is_none());
+        assert!(config.ui_blocked_clients.is_empty());
     }
 
     #[serial_test::serial]
@@ -443,6 +483,29 @@ off_password = "toml-pass"
             config.ui_domain.as_deref(),
             Some("ccedd2f0677de1b05856b55902232949.claudemcpcontent.com")
         );
+    }
+
+    #[serial_test::serial]
+    #[test]
+    fn test_ui_blocked_clients_from_env() {
+        let mut guard = TestGuard::new();
+        guard.set("XDG_CONFIG_HOME", "/tmp/nom_mcp_nonexistent_ui_blocked");
+        guard.set("NOM_MCP_UI_BLOCKED_CLIENTS", "claude-ios, claude-android");
+
+        let config = AppConfig::load().expect("should load");
+        assert_eq!(
+            config.ui_blocked_clients,
+            vec!["claude-ios".to_string(), "claude-android".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_ui_blocked_clients_accepts_sequence_form() {
+        // The TOML/array form goes through the same deserializer as the
+        // env-var CSV form.
+        let config: AppConfig =
+            serde_json::from_str(r#"{"ui_blocked_clients": ["claude-ios"]}"#).unwrap();
+        assert_eq!(config.ui_blocked_clients, vec!["claude-ios".to_string()]);
     }
 
     #[serial_test::serial]
