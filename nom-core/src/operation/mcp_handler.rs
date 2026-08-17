@@ -185,6 +185,18 @@ impl McpHandler {
         self
     }
 
+    /// Open a DB connection, honoring the test-only `db_path` override
+    /// (`with_db_path`) when set and the configured default location
+    /// otherwise. Centralizes the `#[cfg(test)]` branching so call sites
+    /// that need a connection don't each duplicate it.
+    async fn open_connection(&self) -> Result<Connection, crate::storage::StorageError> {
+        #[cfg(test)]
+        if let Some(ref path) = self.db_path {
+            return Connection::open_at(path).await;
+        }
+        Connection::open().await
+    }
+
     /// Build the list of tools from the registry, filtering by MCP surface
     /// and skipping operations with invalid schemas.
     pub(crate) fn build_tools(&self) -> Vec<Tool> {
@@ -227,15 +239,7 @@ impl McpHandler {
     ) -> Vec<Tool> {
         let mut tools = self.build_tools();
 
-        #[cfg(test)]
-        let conn = if let Some(ref path) = self.db_path {
-            Connection::open_at(path).await
-        } else {
-            Connection::open().await
-        };
-
-        #[cfg(not(test))]
-        let conn = Connection::open().await;
+        let conn = self.open_connection().await;
 
         let widget_display_enabled = match conn {
             Ok(conn) => crate::widget::widget_display_enabled(&conn)
@@ -333,27 +337,10 @@ impl McpHandler {
     ) -> Result<ReadResourceResult, ErrorData> {
         match uri {
             "nom://weekly-summary" => {
-                #[cfg(test)]
-                let conn = if let Some(ref path) = self.db_path {
-                    Connection::open_at(path).await.map_err(|e| {
-                        ErrorData::new(
-                            ErrorCode::INTERNAL_ERROR,
-                            format!("failed to open db: {e}"),
-                            None,
-                        )
-                    })?
-                } else {
-                    Connection::open().await.map_err(|e| {
-                        ErrorData::new(
-                            ErrorCode::INTERNAL_ERROR,
-                            format!("failed to open db: {e}"),
-                            None,
-                        )
-                    })?
-                };
-
-                #[cfg(not(test))]
-                let conn = Connection::open().await.map_err(|e| {
+                // Reading a named resource by URI is allowed to fail loudly
+                // (unlike tool listing, which must survive a DB hiccup), so
+                // the error propagates as-is.
+                let conn = self.open_connection().await.map_err(|e| {
                     ErrorData::new(
                         ErrorCode::INTERNAL_ERROR,
                         format!("failed to open db: {e}"),
@@ -509,10 +496,10 @@ impl ServerHandler for McpHandler {
         ])
     }
 
-    /// TEMPORARY debug logging (investigating widget loading on Claude iOS):
-    /// log the exact `clientInfo` each platform reports at MCP handshake,
-    /// so we can compare what Claude iOS vs desktop/web actually send.
-    /// Remove once the iOS widget flow is verified in production (TASK-51).
+    /// Debug-level client-identity log at MCP handshake: the `clientInfo`
+    /// each client reports and the negotiated protocol revision, so sessions
+    /// can be attributed to a concrete client (Claude iOS vs web relay vs
+    /// desktop) when investigating cross-client behavior differences.
     async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
         match context.peer.peer_info() {
             Some(info) => tracing::debug!(
@@ -544,8 +531,8 @@ impl ServerHandler for McpHandler {
         // relay requests do not (None → nothing is blocked).
         let client_name = context.client_info().map(|info| info.name);
         let tools = self.build_tools_gated(client_name.as_deref()).await;
-        // TEMPORARY debug logging (investigating widget loading on Claude
-        // iOS): how many tools carry `_meta.ui` in this response.
+        // Debug-level audit of the gating decision: which client asked, and
+        // how many tools carry `_meta.ui` in this response.
         tracing::debug!(
             ui_meta_tool_count = tools.iter().filter(|t| t.meta.is_some()).count(),
             ?client_name,
@@ -591,10 +578,9 @@ impl ServerHandler for McpHandler {
     ) -> Result<ReadResourceResponse, ErrorData> {
         let client_name = context.client_info().map(|info| info.name);
         let uri = request.uri.to_string();
-        // TEMPORARY debug logging (investigating widget gating since 81d32ff):
-        // the widget-load path — which URIs clients fetch and whether they
-        // succeed (iOS currently fails app load with "unable to connect to
-        // server").
+        // Debug-level access log for the resource-read path (which URIs
+        // clients fetch and whether they succeed) — this is where MCP Apps
+        // hosts pull widget HTML.
         let outcome = self.dispatch_read_resource(&request.uri).await;
         tracing::debug!(
             ?client_name,

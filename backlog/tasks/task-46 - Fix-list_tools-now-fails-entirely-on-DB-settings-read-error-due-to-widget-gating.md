@@ -3,10 +3,10 @@ id: TASK-46
 title: >-
   Fix: list_tools now fails entirely on DB/settings read error due to widget
   gating
-status: Dev Ready
+status: Done
 assignee: []
 created_date: '2026-08-13 18:49'
-updated_date: '2026-08-13 19:23'
+updated_date: '2026-08-17 17:48'
 labels:
   - review-fix
   - planned
@@ -131,3 +131,9 @@ Then:
   currently consistent) pattern from this handler-level one. Unifying those
   is a separate, larger concern not implied by this ticket's description.
 <!-- SECTION:PLAN:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Completed the remaining refactor from this ticket (the primary defect was already fixed by TASK-44/457104b, per the plan's status check). Extracted a private `McpHandler::open_connection()` helper in nom-core/src/operation/mcp_handler.rs centralizing the `#[cfg(test)]`/`#[cfg(not(test))]` Connection::open_at/open branching, replacing the duplicated boilerplate in both call sites: `build_tools_gated` (fallback-to-disabled behavior unchanged) and `dispatch_read_resource`'s nom://weekly-summary arm (fail-loud error wrapping preserved, with a comment explaining why this site propagates errors unlike tool listing). Pure internal refactor — no behavior change; all existing mcp_handler tests pass unmodified, including test_list_tools_db_open_failure_falls_back_to_no_gating and test_dispatch_read_resource_returns_weekly_summary_json. Verified: cargo build clean, full workspace nextest 311/311, clippy -D warnings, fmt.
+<!-- SECTION:FINAL_SUMMARY:END -->

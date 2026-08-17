@@ -1,10 +1,10 @@
 ---
 id: TASK-53
 title: Diagnose iOS widget-load "unknown error" after successful _meta.ui discovery
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-08-16 23:37'
-updated_date: '2026-08-17 15:58'
+updated_date: '2026-08-17 18:23'
 labels: []
 dependencies: []
 priority: high
@@ -84,4 +84,44 @@ Re-introduces the 81d32ff claude-ios exclusion as a CONFIGURABLE list instead of
 
 **Deploy note for user (v0.5.5).** In the secrets-render source behind /run/secrets/rendered/nom-mcp.env: REMOVE `NOM_MCP_UI_DOMAIN` (domain experiment concluded inert) and ADD `NOM_MCP_UI_BLOCKED_CLIENTS=claude-ios`. Effect: iOS app no longer learns widgets exist → text-only results, no 'Failed to load the MCP app' banner; web unaffected. List adjustable later (add/remove client names) without another release.
 ---
+
+author: cleanup-audit
+created: 2026-08-17 17:48
+---
+## 2026-08-18 — saga cleanup complete
+
+Codebase cleanup around this investigation landed (see TASK-51/TASK-46):
+- Temporary HTTP debug middleware removed from serve-http (evidence for the upstream report was already captured; with the blocklist live, iOS no longer generates the failure traffic it was built to observe).
+- The three "TEMPORARY ... Remove once verified" debug logs in mcp_handler.rs reworded into permanent debug-level observability (handshake identity, gating decision, resource-read access log).
+- `ui_domain` / `ui_blocked_clients` documented in README (config example + "MCP Apps UI widgets" section pointing at this report).
+
+Open follow-ups (external, not blocking):
+1. File docs/ios-widget-upstream-report.md against anthropics/claude-ai-mcp#40 (ochafik active there) or a fresh issue.
+2. When Anthropic ships a fixed iOS renderer (or responds), remove `claude-ios` from NOM_MCP_UI_BLOCKED_CLIENTS — no release needed.
+3. Optional future hardening: content-versioned ui:// URIs (todoist-style cache-busting), deliberately deferred as a single-variable experiment.
+---
+
+created: 2026-08-17 18:22
+---
+Follow-up (1) CANCELLED (2026-08-18): user decided not to file the upstream report against anthropics/claude-ai-mcp#40; docs/ios-widget-upstream-report.md was deleted (commit 9e96d27). The diagnostic record (Case A/B evidence, ruled-out layers, root cause) remains preserved in this task's implementation notes, comments, and final summary.
+---
+
+created: 2026-08-17 18:23
+---
+Correction to comment #4 (2026-08-18): the 'temporary HTTP debug middleware removed' bullet was reversed by user decision — the middleware is KEPT (general-purpose /mcp debugging); only its investigation-era comment framing was stripped. See TASK-51's rescoped record.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+RESOLVED — root cause attributed to the Claude iOS client; server-side levers exhausted and documented; durable mitigation shipped.
+
+**Root cause.** Claude iOS 1.260813.0's widget loader fails client-side after a fully successful server handshake: the relay completes initialize @2026-01-26 (+ io.modelcontextprotocol/ui extension) and either goes silent before issuing resources/read (Case A) or receives our 200 + full self-contained HTML and still shows "Failed to load the MCP app. Unable to connect to server" (Case B). Identical server responses render correctly on claude.ai web (control case). Five server/proxy layers ruled out with production evidence (session persistence, protocol negotiation, auth proxy, CSP/sandbox content, domain pinning) — full evidence chain preserved in this task's implementation notes and comments (the standalone upstream report doc was deleted 2026-08-18; user decided not to file upstream).
+
+**Server-side fixes shipped during diagnosis (all kept — each fixed a real defect):** v0.4.6 persistent McpSessionStore (stale sessions restore across restarts); v0.5.2 ui:// resources listed in resources/list; v0.5.3 supported_protocol_versions() override echoing the 2026-01-26 MCP Apps revision (rmcp otherwise downgrades and the relay abandons the session); v0.5.4 optional _meta.ui.domain emission (concluded INERT for iOS — production leaves it unset).
+
+**Final mitigation (v0.5.5).** Configurable `_meta.ui` client blocklist: `AppConfig::ui_blocked_clients` (env NOM_MCP_UI_BLOCKED_CLIENTS comma-separated, TOML array accepted), `McpHandler::with_ui_blocked_clients` wired at both serve sites, `build_tools_gated(Option<&str>)` suppresses widget `_meta.ui` for session clients whose clientInfo.name matches (case-insensitive, trimmed); stateless requests never blocked so web is unaffected by construction. Production sets `claude-ios`: iOS gets clean text-only results with no error banner until Anthropic ships a fixed renderer; the list is adjustable without a release.
+
+**Follow-ups:** drop claude-ios from the blocklist when the client is fixed (no release needed); optional content-versioned ui:// URIs later. Upstream-report follow-up cancelled 2026-08-18 (user decision).
+<!-- SECTION:FINAL_SUMMARY:END -->

@@ -265,21 +265,21 @@ fn resolve_bind_addr(bind_address: &str, port: u16) -> std::io::Result<SocketAdd
         })
 }
 
-/// TEMPORARY debug logging (investigating widget gating since 81d32ff):
-/// log every HTTP request hitting the `/mcp` endpoint — including ones rmcp
-/// rejects before they reach the `McpHandler` (e.g. Claude iOS's bogus
-/// `MCP-Protocol-Version: 2026-01-26` header) — so the full per-session
-/// request stream is visible alongside the identity logs from
-/// `on_initialized`. Also extracts the JSON-RPC method name(s) from POST
-/// bodies so each line shows which MCP call arrived (`tools/list`,
-/// `resources/read`, `tools/call:<tool>`, ...) plus the peer address,
-/// X-Forwarded-For, and the 2026-07-28 transport headers (`Mcp-Method`,
-/// `Mcp-Name`). Response bodies of POSTs are buffered (≤1 MiB) and any
-/// JSON-RPC `error` objects in them are logged — this makes failures that
-/// rmcp rejects *before* they reach the `McpHandler` (e.g. missing inline
-/// `_meta` or `Mcp-Method`/`Mcp-Name` headers) visible next to the request
-/// line. Temporary debug behavior: an unbufferable POST response yields a
-/// 502 instead of a dropped body. Remove once the investigation is done.
+/// Debug-level access logging for the `/mcp` endpoint: log every HTTP
+/// request — including ones rmcp rejects before they reach the
+/// `McpHandler` — so the full per-session request stream is visible
+/// alongside the identity logs from `on_initialized`. Extracts the JSON-RPC
+/// method name(s) from POST bodies so each line shows which MCP call
+/// arrived (`tools/list`, `resources/read`, `tools/call:<tool>`, ...) plus
+/// the peer address, X-Forwarded-For, and the 2026-07-28 transport headers
+/// (`Mcp-Method`, `Mcp-Name`). Response bodies of POSTs are buffered
+/// (≤1 MiB) and any JSON-RPC `error` objects in them are logged, making
+/// failures that rmcp rejects *before* they reach the `McpHandler` (e.g.
+/// missing inline `_meta` or `Mcp-Method`/`Mcp-Name` headers) visible next
+/// to the request line. Behavior notes: an over-limit request body yields a
+/// 413, and an unbufferable POST response yields a 502 instead of a dropped
+/// body. All output is at debug level, so it is silent unless RUST_LOG
+/// enables debug logging.
 async fn debug_log_mcp_request(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     mut req: axum::extract::Request,

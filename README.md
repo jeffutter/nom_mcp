@@ -144,6 +144,8 @@ off_password = "..."              # optional — OpenFoodFacts account password 
 off_app_uuid = "..."              # optional — per-installation OFF identifier; auto-generated + persisted if unset
 timezone = "America/New_York"     # optional IANA name; falls back to OS-local, then UTC
 http_bind_address = "127.0.0.1"   # bind address for `nom-mcp serve http` (accepts IPv4, IPv6, or hostname)
+ui_blocked_clients = ["claude-ios"]  # optional — client names whose widget `_meta.ui` pointers are suppressed (env: comma-separated NOM_MCP_UI_BLOCKED_CLIENTS)
+ui_domain = "..."                 # optional — MCP Apps UI sandbox origin emitted as `_meta.ui.domain`; leave unset unless your host requires it
 
 [remote]
 server_url = "http://localhost:8000"  # only read by nom-mcp-remote; must point at a running `serve http`
@@ -154,6 +156,13 @@ The USDA FDC key is optional and validated lazily — `search_food` still works 
 OpenFoodFacts credentials are also optional. When both `off_username` and `off_password` are set (or via `NOM_MCP_OFF_USERNAME` / `NOM_MCP_OFF_PASSWORD`), every OFF request carries an `Authorization: Basic ...` header — required for the OFF staging deployment (`world.openfoodfacts.net`) and any future write operations. When they're absent, nom_mcp logs a warning at startup and sends unauthenticated requests (OFF's public read API works without auth).
 
 Every OFF request also carries the app-identity parameters OFF asks apps to send: `app_name=nom_mcp`, `app_version=<version>`, and `app_uuid`. The `app_uuid` is a stable random identifier for this installation (so OFF moderators can ban a single user without affecting the whole app account): set `off_app_uuid` in config (or `NOM_MCP_OFF_APP_UUID`) to provide your own, otherwise one is generated on first use and persisted at `$XDG_DATA_HOME/nom_mcp/off_app_uuid`.
+
+### MCP Apps UI widgets
+
+The `get_goal_progress` and `get_weekly_progress` tools can attach an MCP Apps `_meta.ui` pointer to their `tools/list` declarations (gated on the MCP-only `widget_display_enabled` setting) so capable hosts render an interactive widget instead of plain text. Two deployment-specific config knobs shape that behavior:
+
+- **`ui_blocked_clients`** — client names (the `clientInfo.name` reported during MCP `initialize`, matched case-insensitively) for which the `_meta.ui` pointers are suppressed, so those clients get plain text results instead of attempting to load UI they cannot render. As of v0.5.5, Claude iOS's widget renderer fails with "Unable to connect to server" despite fully successful server handshakes, so production sets this to `claude-ios` until Anthropic fixes the client side. Stateless requests carry no identity and are never blocked.
+- **`ui_domain`** — optional sandbox-origin pinning (`_meta.ui.domain`). Leave unset unless your host specifically requires it: a subtly wrong value has been observed to break rendering even on web.
 
 ## Storage locking
 
