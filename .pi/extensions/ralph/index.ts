@@ -77,7 +77,7 @@ const DEFAULT_REVIEW_EVERY = 3;
 
 const TRIAGE_TIMEOUT_MS = 5 * 60_000;
 const RESEARCH_TIMEOUT_MS = 15 * 60_000;
-const PLAN_TIMEOUT_MS = 20 * 60_000;
+const PLAN_TIMEOUT_MS = 45 * 60_000;
 const EXECUTE_TIMEOUT_MS = 40 * 60_000;
 const CHOOSE_TIMEOUT_MS = 10 * 60_000;
 const REVIEW_TIMEOUT_MIN = 50;
@@ -1298,7 +1298,11 @@ async function runLoop(
     stopWidgetTicker();
     const summary = await buildFinalSummary(cwd, state);
     const level = state.status === "done" ? "info" : "warn";
-    ctx.ui.notify(summary, level);
+    try {
+      ctx.ui.notify(summary, level);
+    } catch {
+      // ctx is stale (see renderWidget); postStatusMessage below still records the summary.
+    }
     postStatusMessage(pi, summary, level);
     await notifyHuman(pi, cwd, state);
   }
@@ -1334,8 +1338,18 @@ function widgetLines(state: RalphState): string[] {
   ];
 }
 
+/** The `ctx` captured by `/ralph` at start is used for the rest of the run — including from
+ * the background widget ticker — so it can outlive the session it was captured from (the user
+ * runs `/new`, forks, switches sessions, or reloads elsewhere while ralph keeps looping). pi
+ * then throws on any `ctx.ui` access. That's not recoverable here, and the loop's real work
+ * (headless subprocess calls via `pi`, not `ctx`) doesn't depend on it, so just stop trying to
+ * paint the widget instead of taking the whole process down with an uncaught exception. */
 function renderWidget(ctx: ExtensionCommandContext, state: RalphState): void {
-  ctx.ui.setWidget("ralph", widgetLines(state));
+  try {
+    ctx.ui.setWidget("ralph", widgetLines(state));
+  } catch {
+    stopWidgetTicker();
+  }
 }
 
 /** Ticks the persistent `ralph` widget every second while a run is active, so the
