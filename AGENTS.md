@@ -88,6 +88,14 @@ git push && git push --tags
 
 The bump commit + tag `vX.Y.Z` is pushed to origin (GitHub); a GitHub Action builds the new version (~5 min) and deploys it to the homelab production service. No manual deploy steps are needed — after the action completes, verify the live version via `systemctl status nom-mcp` on the homelab (the `ExecStart` store path changes per build).
 
+## Image limits (LiteLLM `coding` group)
+
+The LiteLLM proxy's `coding` model group fronts a local vLLM instance configured with `--limit-mm-per-prompt image=4`: any single prompt carrying more than 4 images is rejected up-front with HTTP 400 (`litellm.BadRequestError: At most 4 image(s) may be provided in one prompt`). Widget visual verification (light/dark × variants) routinely exceeds this, so:
+
+- **Never attach more than 4 images in one prompt.** Keep screenshot batches at ≤4 (e.g. light+dark of one variant per pass) and split larger comparisons across multiple prompts.
+- **Do multi-image analysis in subagents.** The parent session stays image-free; each subagent receives its own ≤4-image batch and reports findings back as text. If a prompt fails with the 4-image 400, split the images across separate subagent runs — don't retry the same prompt unchanged.
+- The cap lives in vLLM (`--limit-mm-per-prompt`), not LiteLLM. Raising it costs context budget (each image reserves thousands of tokens), so prefer splitting over reconfiguring.
+
 ## Architecture
 
 ### One `Operation`, four surfaces
