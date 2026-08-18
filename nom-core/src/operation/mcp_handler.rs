@@ -1035,6 +1035,9 @@ mod tests {
         assert_eq!(mime_type.as_deref(), Some("text/html;profile=mcp-app"));
         assert!(!text.is_empty());
         assert!(text.contains("<!DOCTYPE html>"));
+        // Size reporting is load-bearing for hosts that size the iframe from
+        // the widget's own reports (TASK-56); guard against it being lost.
+        assert!(text.contains("ui/notifications/size-changed"));
     }
 
     /// AC#3: `call_tool("get_goal_progress")` returns byte-identical content

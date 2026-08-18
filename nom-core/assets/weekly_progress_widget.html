@@ -30,29 +30,29 @@
   }
 
   body {
-    padding: 16px;
+    padding: 10px;
   }
 
   h1 {
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 600;
-    margin: 0 0 2px 0;
+    margin: 0 0 1px 0;
   }
 
   .subtitle {
-    font-size: 12px;
+    font-size: 11px;
     color: var(--fg-muted);
-    margin: 0 0 14px 0;
+    margin: 0 0 8px 0;
   }
 
   .section-title {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.03em;
     color: var(--fg-muted);
-    margin: 16px 0 8px 0;
-    padding-top: 10px;
+    margin: 8px 0 4px 0;
+    padding-top: 4px;
     border-top: 1px solid var(--border);
   }
 
@@ -77,7 +77,7 @@
   .bar.status-over { fill: var(--over); }
 
   .bar-label {
-    font-size: 9px;
+    font-size: 10px;
     fill: var(--fg-muted);
     text-anchor: middle;
   }
@@ -107,8 +107,8 @@
   .summary-row {
     display: flex;
     justify-content: space-between;
-    font-size: 13px;
-    margin-top: 8px;
+    font-size: 12px;
+    margin-top: 6px;
   }
 
   .summary-row .label {
@@ -116,10 +116,10 @@
   }
 
   .weight-status {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
-    padding: 1px 6px;
+    padding: 1px 5px;
     border-radius: 4px;
     background: var(--track);
   }
@@ -251,8 +251,8 @@
   }
 
   function caloriesChartSvg(data) {
-    var width = 320, height = 140;
-    var padLeft = 8, padRight = 8, padTop = 8, padBottom = 20;
+    var width = 320, height = 72;
+    var padLeft = 8, padRight = 8, padTop = 4, padBottom = 16;
     var chartW = width - padLeft - padRight;
     var chartH = height - padTop - padBottom;
 
@@ -299,7 +299,9 @@
       rect.setAttribute("x", x);
       rect.setAttribute("y", y);
       rect.setAttribute("width", barW);
-      rect.setAttribute("height", Math.max(0, barH));
+      // Zero-calorie days render nothing (nothing was logged); any other
+      // day gets at least a 1px bar so its <title> tooltip stays hoverable.
+      rect.setAttribute("height", v > 0 ? Math.max(1, barH) : 0);
       var titleEl = document.createElementNS(SVG_NS, "title");
       titleEl.textContent = d + ": " + fmt(v) + " cal";
       rect.appendChild(titleEl);
@@ -308,7 +310,7 @@
       var label = document.createElementNS(SVG_NS, "text");
       label.setAttribute("class", "bar-label");
       label.setAttribute("x", x + barW / 2);
-      label.setAttribute("y", height - 6);
+      label.setAttribute("y", height - 4);
       label.textContent = dayLabel(d);
       svg.appendChild(label);
     });
@@ -317,8 +319,8 @@
   }
 
   function weightChartSvg(data) {
-    var width = 320, height = 100;
-    var padLeft = 8, padRight = 8, padTop = 10, padBottom = 10;
+    var width = 320, height = 50;
+    var padLeft = 8, padRight = 8, padTop = 4, padBottom = 4;
     var chartW = width - padLeft - padRight;
     var chartH = height - padTop - padBottom;
 
