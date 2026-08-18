@@ -68,7 +68,7 @@ cargo clippy --all-targets --all-features --workspace -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --all-features --workspace --examples
 
 # Run the local CLI directly
-cargo run -p nom-mcp --bin nom-mcp -- <operation> key=value ...
+cargo run -p nom-mcp --bin nom-mcp -- <operation> --key value ...
 
 # Run the MCP/HTTP server
 cargo run -p nom-mcp --bin nom-mcp -- serve stdio

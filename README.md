@@ -26,10 +26,10 @@ cargo build --release --workspace
 
 | Surface | Invocation | Use case |
 |---|---|---|
-| Local CLI | `nom-mcp <operation> key=value ...` | One-shot commands against the local database; no server needed. |
+| Local CLI | `nom-mcp <operation> --key value ...` | One-shot commands against the local database; no server needed. |
 | MCP (stdio) | `nom-mcp serve stdio` | For MCP clients (e.g. Claude Desktop) that spawn the binary directly. |
 | MCP (HTTP) + REST | `nom-mcp serve http --port 8000` | A long-running server: MCP over streamable-HTTP at `/mcp`, plus a REST API at `/api/*`. |
-| Remote CLI | `nom-mcp-remote <operation> key=value ...` | Same CLI ergonomics as the local CLI, but talks to a `serve http` server's REST API instead of opening the database directly. |
+| Remote CLI | `nom-mcp-remote <operation> key=value ...` | The same operations as the local CLI, but takes bare `key=value` arguments (instead of the local CLI's `--key value` flags) and talks to a `serve http` server's REST API instead of opening the database directly. |
 
 The local CLI and `nom-mcp serve` both open the SQLite database directly and hold an advisory lock while running — **do not run the local CLI against a database that a `serve` process already has open** (and vice versa); use `nom-mcp-remote` against the running server instead. See [Storage locking](#storage-locking) below.
 
@@ -38,44 +38,44 @@ The local CLI and `nom-mcp serve` both open the SQLite database directly and hol
 Every invocation opens the local database directly, runs one operation, prints JSON to stdout, and exits.
 
 ```sh
-nom-mcp <operation> [key=value ...]
+nom-mcp <operation> [--key value ...]
 ```
 
-Arguments are `key=value` pairs; values are auto-typed (bare numbers become JSON numbers, `true`/`false` become booleans, anything that parses as JSON — including `[...]`/`{...}` — is parsed as JSON, everything else is a string). `nom-mcp --help` / `nom-mcp <operation> --help` prints available subcommands.
+Arguments are `--key value` long flags (`--key=value` also works); values are auto-typed by trying a JSON parse first (numbers, booleans, `null`, and `[...]`/`{...}` become JSON, everything else stays a string), so nested-JSON fields can be passed inline as single-quoted JSON. Note that `nom-mcp-remote` differs here: it takes bare `key=value` pairs instead of flags (see [Usage: `nom-mcp-remote`](#usage-nom-mcp-remote)). `nom-mcp --help` / `nom-mcp <operation> --help` prints available subcommands.
 
 ### Operations
 
 | Operation | Purpose |
 |---|---|
-| `search_food query=<text or barcode>` | Search Custom Foods + USDA FDC (free text) or OpenFoodFacts (all-digit barcode). Every result is upserted into the local cache, so its `food_id` is immediately usable. |
-| `create_custom_food name=<text> serving_size=<json> nutrients=<json>` | Define a Custom Food from per-serving nutrients (`serving_size.unit` must be a gram-equivalent unit). |
-| `log_meal portions=<json>` | Log a meal from one or more `{food_id, quantity, quantity_mode}` portions, plus an optional raw-macro `adjustment` and `logged_at` override. Nutrients are snapshotted at log time. |
-| `update_meal meal_id=<id> ...` | Partial patch to an existing meal (`portions`, if given, fully replaces the array; `adjustment`/`logged_at` patch independently). |
-| `delete_meal meal_id=<id>` | Hard delete (cascades to its portions). |
-| `search_meals query=<text>` | Keyword search over logged meals' food names, most-recent-first; optional date range filter. |
-| `get_meals_by_date_range start=<date> end=<date>` | Meals logged within an inclusive date range. |
-| `log_weight value=<number>` | Log a body-weight entry. Value is stored as-is (no unit enforcement); optional `logged_at` allows backdating. |
-| `update_weight_entry id=<id> ...` | Partial patch to a weight entry's value and/or timestamp. |
-| `delete_weight_entry id=<id>` | Hard delete. |
+| `search_food --query <text or barcode>` | Search Custom Foods + USDA FDC (free text) or OpenFoodFacts (all-digit barcode). Every result is upserted into the local cache, so its `food_id` is immediately usable. |
+| `create_custom_food --name <text> --serving_size <json> --nutrients <json>` | Define a Custom Food from per-serving nutrients (`serving_size.unit` must be a gram-equivalent unit). |
+| `log_meal --portions <json>` | Log a meal from one or more `{food_id, quantity, quantity_mode}` portions, plus an optional raw-macro `adjustment` and `logged_at` override. Nutrients are snapshotted at log time. |
+| `update_meal --meal_id <id> ...` | Partial patch to an existing meal (`portions`, if given, fully replaces the array; `adjustment`/`logged_at` patch independently). |
+| `delete_meal --meal_id <id>` | Hard delete (cascades to its portions). |
+| `search_meals --query <text>` | Keyword search over logged meals' food names, most-recent-first; optional date range filter. |
+| `get_meals_by_date_range --start_date <date> --end_date <date>` | Meals logged within an inclusive date range. |
+| `log_weight --value <number>` | Log a body-weight entry. Value is stored as-is (no unit enforcement); optional `logged_at` allows backdating. |
+| `update_weight_entry --entry_id <id> ...` | Partial patch to a weight entry's value and/or timestamp. |
+| `delete_weight_entry --entry_id <id>` | Hard delete. |
 | `get_weight_today` | Weight entries logged today (per the resolved Clock timezone). |
-| `get_weight_by_date date=<date>` | Weight entries on a specific date. |
-| `get_weight_by_date_range start=<date> end=<date>` | Weight entries within an inclusive date range. |
-| `set_nutrition_goals calories=<n> calories_direction=<target\|minimum\|maximum> ...` | Set or update nutrition/weight goals. Partial patch: only provided nutrients change; others carry forward from the current active goal. `*_direction` is required the first time a nutrient is set. Supports `calories`, `protein_g`, `carbs_g`, `fat_g`, `fiber_g` (each with a `*_direction`), and `target_weight` (no direction). |
-| `get_goal_progress date=<date>` | Per-nutrient consumed-vs-target and weight-vs-target comparison for a date (defaults to today), plus the day's Fasting Window (`fasting_hours`, derived from the gap between that day's last Meal and the next Meal). |
+| `get_weight_by_date --date <date>` | Weight entries on a specific date. |
+| `get_weight_by_date_range --start_date <date> --end_date <date>` | Weight entries within an inclusive date range. |
+| `set_nutrition_goals --calories <n> --calories_direction <target\|minimum\|maximum> ...` | Set or update nutrition/weight goals. Partial patch: only provided nutrients change; others carry forward from the current active goal. `*_direction` is required the first time a nutrient is set. Supports `calories`, `protein_g`, `carbs_g`, `fat_g`, `fiber_g` (each with a `*_direction`), and `target_weight` (no direction). |
+| `get_goal_progress [--date <date>]` | Per-nutrient consumed-vs-target and weight-vs-target comparison for a date (defaults to today), plus the day's Fasting Window (`fasting_hours`, derived from the gap between that day's last Meal and the next Meal). |
 
 Two additional operations, `get_widget_display` and `set_widget_display`, exist for a future widget UI and are exposed on the **MCP surface only** (not local CLI or REST) — see [AGENTS.md](AGENTS.md#one-operation-four-surfaces).
 
 Example:
 
 ```sh
-nom-mcp search_food query=almonds
-nom-mcp log_meal portions='[{"food_id":1,"quantity":150,"quantity_mode":"grams"}]'
-nom-mcp create_custom_food name="Protein Shake" \
-  serving_size='{"quantity":1,"unit":"grams"}' \
-  nutrients='{"calories":150,"protein_g":30,"carbs_g":5,"fat_g":2,"fiber_g":0}'
-nom-mcp log_weight value=181.4
-nom-mcp get_weight_by_date_range start=2026-08-01 end=2026-08-12
-nom-mcp set_nutrition_goals calories=2200 calories_direction=target protein_g=150 protein_g_direction=minimum
+nom-mcp search_food --query almonds
+nom-mcp log_meal --portions '[{"food_id":1,"quantity":150,"quantity_mode":"grams"}]'
+nom-mcp create_custom_food --name "Protein Shake" \
+  --serving_size '{"quantity":1,"unit":"grams"}' \
+  --nutrients '{"calories":150,"protein_g":30,"carbs_g":5,"fat_g":2,"fiber_g":0}'
+nom-mcp log_weight --value 181.4
+nom-mcp get_weight_by_date_range --start_date 2026-08-01 --end_date 2026-08-12
+nom-mcp set_nutrition_goals --calories 2200 --calories_direction target --protein_g 150 --protein_g_direction minimum
 nom-mcp get_goal_progress
 ```
 
@@ -117,11 +117,11 @@ Besides its tools, the MCP surface exposes one resource, `nom://weekly-summary`,
 
 ### REST API
 
-`serve http` also exposes every CLI-surfaced operation as `POST /api/{operation}`, with a JSON request body matching the operation's `key=value` arguments (e.g. `POST /api/log_weight` with body `{"value": 181.4}`) and the same JSON response/error shape as the CLI. This is what `nom-mcp-remote` talks to.
+`serve http` also exposes every CLI-surfaced operation as `POST /api/{operation}`, with a JSON object whose keys are the operation's argument names (e.g. `POST /api/log_weight` with body `{"value": 181.4}`) and the same JSON response/error shape as the CLI. This is what `nom-mcp-remote` talks to.
 
 ## Usage: `nom-mcp-remote`
 
-A thin HTTP client with the same CLI surface as the local CLI (`nom-mcp-remote <operation> key=value ...`) that posts to a running `serve http` server's `/api/{operation}` endpoint instead of touching the database directly, and renders results/errors identically to the local CLI. It requires `[remote].server_url` to be configured (see below) and a `nom-mcp serve http` process to be running and reachable.
+A thin HTTP client exposing the same operations as the local CLI (`nom-mcp-remote <operation> key=value ...`) that posts to a running `serve http` server's `/api/{operation}` endpoint instead of touching the database directly, and renders results/errors identically to the local CLI. Unlike the local CLI's `--key value` flags, it takes bare `key=value` pairs, and its auto-typing is narrower: only bare numbers and `true`/`false` become JSON numbers/booleans — everything else is sent as a string. As a result, nested-JSON arguments (e.g. `log_meal`'s `portions`) cannot be passed via the remote CLI yet (tracked in TASK-60). It requires `[remote].server_url` to be configured (see below) and a `nom-mcp serve http` process to be running and reachable.
 
 ```sh
 nom-mcp-remote search_food query=almonds
