@@ -1,11 +1,11 @@
 ---
 id: TASK-55
 title: 'Redesign goal-progress widget: compact ring row + expanded card variant'
-status: In Progress
+status: Done
 assignee:
   - '@ralph'
 created_date: '2026-08-17 21:12'
-updated_date: '2026-08-18 10:20'
+updated_date: '2026-08-18 16:29'
 labels:
   - widgets
   - planned
@@ -42,13 +42,13 @@ Must preserve: XSS-safe escaping of all interpolated values, widget_display_enab
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Default get_goal_progress rendering is a single row of rings <= ~120px tall at 320px width: percent-of-goal inside each ring, nutrient label below, all 5 nutrients present.
-- [ ] #2 Nutrients without a target degrade gracefully (neutral ring or no fill, consumed value still shown).
-- [ ] #3 Weight (latest vs target + status) and fasting hours render in a compact footer line, hidden gracefully when absent.
-- [ ] #4 An expanded 2x2 card variant matching the reference style is available when the user explicitly asks for a fuller daily summary, selectable through the tool's input schema/description without breaking existing clients.
-- [ ] #5 Ring colors follow status (under/met/over) and adapt to light/dark themes via the existing host-context mechanism.
-- [ ] #6 Widget stays self-contained (zero external requests), keeps size-changed reporting, and existing mcp_handler gating/blocklist/XSS tests still pass.
-- [ ] #7 Manual visual verification on a seeded local instance (TASK-54) in both light and dark mode.
+- [x] #1 Default get_goal_progress rendering is a single row of rings <= ~120px tall at 320px width: percent-of-goal inside each ring, nutrient label below, all 5 nutrients present.
+- [x] #2 Nutrients without a target degrade gracefully (neutral ring or no fill, consumed value still shown).
+- [x] #3 Weight (latest vs target + status) and fasting hours render in a compact footer line, hidden gracefully when absent.
+- [x] #4 An expanded 2x2 card variant matching the reference style is available when the user explicitly asks for a fuller daily summary, selectable through the tool's input schema/description without breaking existing clients.
+- [x] #5 Ring colors follow status (under/met/over) and adapt to light/dark themes via the existing host-context mechanism.
+- [x] #6 Widget stays self-contained (zero external requests), keeps size-changed reporting, and existing mcp_handler gating/blocklist/XSS tests still pass.
+- [x] #7 Manual visual verification on a seeded local instance (TASK-54) in both light and dark mode.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -137,3 +137,20 @@ Unchanged and must still pass: all 21 mcp_handler tests (widget-display gating, 
 - AC#7 visual check MUST run in a fresh subagent with ≤4 screenshots: >4 images in one session context → LiteLLM 400 on every subsequent call (systemic failure mode, see the note above the verification steps).
 - The weekly widget (TASK-56) shares this design language; keep the ring helper generic enough to reuse later, but do NOT refactor weekly_progress_widget.html in this ticket.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+## Implementation notes (2026-08-18, execution run)
+
+### What landed
+Per the locked plan: additive `GoalProgressVariant` enum (compact|expanded, lowercase serde) in nom-core/src/goal/mod.rs; `variant: Option<GoalProgressVariant>` on GetGoalProgressRequest and resolved `variant` echoed in the GoalProgress response; description() documents the arg. Widget HTML rewritten to the compact ring-row default + expanded 2-column card grid, branching on the echoed variant field (older servers without it render compact). IPC/handshake, applyHostContext, reportSize+ResizeObserver, extractGoalProgress all untouched. No changes to mcp_handler.rs/widget/mod.rs/main.rs.
+
+### Verification evidence
+- **Gates**: fmt ✓, clippy -D warnings ✓, nextest 332/332 ✓ (incl. 3 new variant tests: default compact, expanded echo, invalid variant → Validation), doctests ✓, rustdoc -D warnings ✓.
+- **AC#4 e2e**: rebuilt binary, restarted seeded instance (NOM_MCP_DB_PATH=/tmp/nom-dev/nom.db, port 8000); MCP tools/list inputSchema exposes variant as oneOf const compact/expanded with doc text; tools/call {} → variant=compact; tools/call {variant:expanded} → variant=expanded with byte-identical data; variant=huge → validation error 'unknown variant'. resources/read ui://nom-mcp/goal-progress served HTML byte-identical to repo asset.
+- **AC#1/#3/#5 (DOM, headless Chromium via throwaway harness /tmp/widget-harness, real seeded payload)**: compact reports 320x120 via its own size-changed notification (exactly at the ~120px target); 5 rings, percents 92/115/57/103/100 centered inside, labels below; footer 'Wt 78 → 80' + UNDER chip; '· Fasting 14.5h' segment renders when present; footer element absent (height drops 120→98px) when weight+fasting both missing. Computed strokes: light #2563eb/#dc2626/#16a34a, dark #60a5fa/#f87171/#4ade80 — exact token values under color-scheme from hostContext; over-100% arcs capped at full ring while showing true percent.
+- **AC#2**: no-target nutrient → track-only ring + consumed value ('172.9g') centered; zero-target guard (target=0, percent omitted) → same fallback ('30g'); expanded variant omits no-target nutrients (4 cards) and shows placeholder only when none have targets.
+- **AC#6**: grep confirms zero external refs (no http(s)/link/script-src/fetch/XHR/import); size-changed reporting exercised directly by the harness (it is how all heights were measured); all 21 mcp_handler gating/blocklist/resource tests pass unmodified.
+- **AC#7**: fresh subagent (clean context, exactly 4 image reads) re-shot compact/expanded x light/dark against the current code (harness widget copy verified byte-identical to repo asset) and passed all 11 checklist items with no defects; artifacts verify-*.png in /tmp/widget-harness. Dev server stopped and /tmp/nom-dev removed afterwards.
+<!-- SECTION:NOTES:END -->

@@ -16,6 +16,7 @@
     --under: light-dark(#2563eb, #60a5fa);
     --met: light-dark(#16a34a, #4ade80);
     --over: light-dark(#dc2626, #f87171);
+    --card-bg: light-dark(#ffffff, #1f1f1f);
     --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
 
@@ -30,95 +31,150 @@
   }
 
   body {
-    padding: 16px;
+    padding: 12px;
   }
 
-  h1 {
-    font-size: 15px;
-    font-weight: 600;
-    margin: 0 0 2px 0;
-  }
-
-  .subtitle {
-    font-size: 12px;
+  /* Shared slim date header line (both variants). */
+  .header {
+    font-size: 11px;
     color: var(--fg-muted);
-    margin: 0 0 14px 0;
+    margin: 0 0 6px 0;
+    line-height: 1;
   }
 
-  .row {
-    margin-bottom: 12px;
-  }
+  /* --- Compact variant: single row of rings --- */
 
-  .row-header {
+  .ring-row {
     display: flex;
     justify-content: space-between;
-    align-items: baseline;
-    font-size: 13px;
-    margin-bottom: 4px;
+    gap: 4px;
   }
 
-  .row-label {
-    font-weight: 500;
+  .ring-seg {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
   }
 
-  .row-values {
-    color: var(--fg-muted);
-    font-size: 12px;
+  .ring-wrap {
+    position: relative;
+    width: 44px;
+    height: 44px;
+  }
+
+  .ring-wrap svg,
+  .card-ring svg {
+    display: block;
+  }
+
+  .ring-center {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 600;
     white-space: nowrap;
   }
 
-  .bar-track {
-    height: 6px;
-    border-radius: 3px;
-    background: var(--track);
-    overflow: hidden;
-  }
-
-  .bar-fill {
-    height: 100%;
-    border-radius: 3px;
-    background: var(--accent);
-    transition: width 0.2s ease;
-  }
-
-  .bar-fill.status-under { background: var(--under); }
-  .bar-fill.status-met { background: var(--met); }
-  .bar-fill.status-over { background: var(--over); }
-
-  .no-target {
-    font-size: 12px;
+  .ring-label {
+    font-size: 9px;
     color: var(--fg-muted);
+    margin-top: 2px;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1;
   }
 
-  .section-title {
-    font-size: 11px;
+  /* SVG donut rings: track circle + status-colored fill circle.
+     Both circles must opt out of the SVG default (solid black) fill, or the
+     fill circle paints a solid disc over the donut hole. */
+  .ring-track,
+  .ring-fill {
+    fill: none;
+  }
+
+  .ring-track { stroke: var(--track); }
+
+  .ring-fill.status-under { stroke: var(--under); }
+  .ring-fill.status-met { stroke: var(--met); }
+  .ring-fill.status-over { stroke: var(--over); }
+
+  /* Slim footer line: weight + fasting hours (hidden when both absent). */
+  .footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+    font-size: 10px;
+    color: var(--fg-muted);
+    margin-top: 7px;
+    padding-top: 5px;
+    border-top: 1px solid var(--border);
+    line-height: 1;
+  }
+
+  .footer strong {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  .chip {
+    font-size: 9px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.03em;
-    color: var(--fg-muted);
-    margin: 16px 0 8px 0;
-    padding-top: 10px;
-    border-top: 1px solid var(--border);
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: var(--track);
   }
 
-  .weight-row {
+  .chip.status-under { color: var(--under); }
+  .chip.status-met { color: var(--met); }
+  .chip.status-over { color: var(--over); }
+
+  /* --- Expanded variant: 2-column card grid --- */
+
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .card {
     display: flex;
     justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    background: var(--card-bg);
+    border-radius: 10px;
+    padding: 10px 12px;
+  }
+
+  .card-text {
+    min-width: 0;
+  }
+
+  .card-label {
     font-size: 13px;
-  }
-
-  .weight-status {
-    font-size: 11px;
     font-weight: 600;
-    text-transform: uppercase;
-    padding: 1px 6px;
-    border-radius: 4px;
-    background: var(--track);
+    line-height: 1.2;
   }
 
-  .weight-status.status-under { color: var(--under); }
-  .weight-status.status-met { color: var(--met); }
-  .weight-status.status-over { color: var(--over); }
+  .card-delta {
+    font-size: 11px;
+    color: var(--fg-muted);
+    margin-top: 2px;
+    line-height: 1.2;
+  }
+
+  .card-ring {
+    flex: 0 0 auto;
+  }
 
   .placeholder {
     color: var(--fg-muted);
@@ -213,56 +269,126 @@
     });
   }
 
-  function nutrientRowHtml(label, unit, p) {
-    p = p || {};
-    var consumed = fmt(p.consumed);
-    if (p.target === undefined || p.target === null) {
-      return (
-        '<div class="row">' +
-          '<div class="row-header"><span class="row-label">' + label + '</span>' +
-          '<span class="row-values">' + consumed + unit + ' consumed</span></div>' +
-          '<div class="no-target">No goal set</div>' +
-        '</div>'
-      );
+  // Donut ring as inline SVG. The fill circle uses pathLength="100" so
+  // stroke-dasharray maps directly to a percentage — no circumference math.
+  // fillPct null/undefined or <= 0 draws only the neutral track; values over
+  // 100 cap the arc at a full ring (the true number still shows in text).
+  function ringSvg(size, fillPct, cls) {
+    var c = size / 2;
+    var sw = Math.max(3, Math.round(size * 0.15));
+    var r = c - sw / 2 - 0.5;
+    var html = '<svg width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '" aria-hidden="true">';
+    html += '<circle class="ring-track" cx="' + c + '" cy="' + c + '" r="' + r + '" stroke-width="' + sw + '"/>';
+    if (fillPct !== undefined && fillPct !== null && fillPct > 0) {
+      var dash = Math.max(0, Math.min(100, fillPct));
+      html += '<circle class="ring-fill ' + escapeHtml(cls) + '" cx="' + c + '" cy="' + c + '" r="' + r + '" ' +
+        'pathLength="100" stroke-dasharray="' + dash + ' 100" stroke-linecap="round" ' +
+        'transform="rotate(-90 ' + c + ' ' + c + ')" stroke-width="' + sw + '"/>';
     }
-    var pct = p.percent === undefined || p.percent === null ? 0 : Math.max(0, Math.min(100, p.percent));
-    var status = p.status || "under";
-    return (
-      '<div class="row">' +
-        '<div class="row-header"><span class="row-label">' + label + '</span>' +
-        '<span class="row-values">' + consumed + ' / ' + fmt(p.target) + unit + '</span></div>' +
-        '<div class="bar-track"><div class="bar-fill status-' + status + '" style="width:' + pct + '%"></div></div>' +
-      '</div>'
-    );
+    html += "</svg>";
+    return html;
   }
 
-  function weightRowHtml(w) {
-    w = w || {};
-    if (w.latest_weight === undefined && w.target_weight === undefined) {
-      return '<div class="placeholder">No weight data</div>';
+  // Text centered inside a compact ring: percent-of-goal when available,
+  // otherwise the consumed value (covers no-target and zero-target cases).
+  function centerText(p, unit) {
+    p = p || {};
+    if (p.percent !== undefined && p.percent !== null) {
+      return Math.round(p.percent) + "%";
     }
-    var latest = w.latest_weight === undefined || w.latest_weight === null ? "—" : fmt(w.latest_weight);
-    var target = w.target_weight === undefined || w.target_weight === null ? "—" : fmt(w.target_weight);
-    var statusHtml = w.status
-      ? '<span class="weight-status status-' + w.status + '">' + w.status + '</span>'
-      : "";
-    return (
-      '<div class="weight-row">' +
-        '<span>Latest: <strong>' + latest + '</strong> &nbsp; Target: <strong>' + target + '</strong></span>' +
-        statusHtml +
-      '</div>'
-    );
+    return fmt(p.consumed) + unit;
+  }
+
+  // Delta subtitle for expanded cards: "684 under" / "12 over" / "met".
+  function deltaText(p, unit) {
+    p = p || {};
+    if (p.remaining === undefined || p.remaining === null) return "";
+    if (Math.abs(p.remaining) < 1e-9) return "met";
+    if (p.remaining > 0) return fmt(p.remaining) + unit + " under";
+    return fmt(Math.abs(p.remaining)) + unit + " over";
+  }
+
+  // Slim footer line: weight (latest → target + status chip) and fasting
+  // hours. Returns "" when both are absent so the line hides gracefully.
+  function footerHtml(data) {
+    var w = data.weight || {};
+    var parts = [];
+    var hasWeight =
+      (w.latest_weight !== undefined && w.latest_weight !== null) ||
+      (w.target_weight !== undefined && w.target_weight !== null);
+    if (hasWeight) {
+      var latest = w.latest_weight === undefined || w.latest_weight === null ? "—" : fmt(w.latest_weight);
+      var target = w.target_weight === undefined || w.target_weight === null ? "—" : fmt(w.target_weight);
+      var chip = w.status
+        ? ' <span class="chip status-' + escapeHtml(w.status) + '">' + escapeHtml(w.status) + "</span>"
+        : "";
+      parts.push(
+        "Wt <strong>" + escapeHtml(latest) + "</strong> &rarr; <strong>" + escapeHtml(target) + "</strong>" + chip
+      );
+    }
+    if (data.fasting_hours !== undefined && data.fasting_hours !== null) {
+      parts.push("Fasting " + fmt(data.fasting_hours) + "h");
+    }
+    if (!parts.length) return "";
+    return '<div class="footer">' + parts.join("&nbsp;&middot;&nbsp;") + "</div>";
+  }
+
+  // Compact (default): slim date header, one row of five rings (percent of
+  // goal centered inside each, nutrient label below), slim footer line.
+  function renderCompact(data) {
+    var html = '<p class="header">' + escapeHtml(data.date || "") + "</p>";
+    html += '<div class="ring-row">';
+    NUTRIENTS.forEach(function (n) {
+      var p = data[n.key] || {};
+      var fill = p.percent !== undefined && p.percent !== null ? p.percent : null;
+      var status = p.status || "under";
+      html +=
+        '<div class="ring-seg">' +
+          '<div class="ring-wrap">' +
+            ringSvg(44, fill, "status-" + status) +
+            '<span class="ring-center">' + escapeHtml(centerText(p, n.unit)) + "</span>" +
+          "</div>" +
+          '<span class="ring-label">' + escapeHtml(n.label) + "</span>" +
+        "</div>";
+    });
+    html += "</div>";
+    html += footerHtml(data);
+    return html;
+  }
+
+  // Expanded: same date header, 2-column card grid of targeted nutrients
+  // (bold label + delta subtitle left, status-colored ring right), shared
+  // footer line. Nutrients without a target are skipped here.
+  function renderExpanded(data) {
+    var html = '<p class="header">' + escapeHtml(data.date || "") + "</p>";
+    var cards = [];
+    NUTRIENTS.forEach(function (n) {
+      var p = data[n.key];
+      if (!p || p.target === undefined || p.target === null) return;
+      var fill = p.percent !== undefined && p.percent !== null ? p.percent : null;
+      var status = p.status || "under";
+      cards.push(
+        '<div class="card">' +
+          '<div class="card-text">' +
+            '<div class="card-label">' + escapeHtml(n.label) + "</div>" +
+            '<div class="card-delta">' + escapeHtml(deltaText(p, n.unit)) + "</div>" +
+          "</div>" +
+          '<div class="card-ring">' + ringSvg(40, fill, "status-" + status) + "</div>" +
+        "</div>"
+      );
+    });
+    if (cards.length) {
+      html += '<div class="card-grid">' + cards.join("") + "</div>";
+    } else {
+      html += '<p class="placeholder">No goals set</p>';
+    }
+    html += footerHtml(data);
+    return html;
   }
 
   function render(data) {
-    var html = "<h1>Goal Progress</h1>";
-    html += '<p class="subtitle">' + escapeHtml(data.date || "") + "</p>";
-    NUTRIENTS.forEach(function (n) {
-      html += nutrientRowHtml(n.label, n.unit, data[n.key]);
-    });
-    html += '<div class="section-title">Weight</div>';
-    html += weightRowHtml(data.weight);
-    appEl.innerHTML = html;
+    appEl.innerHTML =
+      data && data.variant === "expanded" ? renderExpanded(data) : renderCompact(data);
     reportSize();
   }
 

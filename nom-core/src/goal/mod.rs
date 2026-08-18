@@ -41,6 +41,16 @@ pub enum ProgressStatus {
     Over,
 }
 
+/// Presentation variant for the goal-progress widget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum GoalProgressVariant {
+    /// Single row of small nutrient rings (default).
+    Compact,
+    /// Fuller card-grid daily summary.
+    Expanded,
+}
+
 /// Per-nutrient progress comparison.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct NutrientProgress {
@@ -62,6 +72,9 @@ pub struct NutrientProgress {
 struct GoalProgress {
     /// Query date (YYYY-MM-DD).
     date: String,
+    /// Resolved widget presentation variant, echoed back so the widget can
+    /// branch on it without depending on host tool-input notifications.
+    variant: GoalProgressVariant,
     /// Per-nutrient progress.
     calories: NutrientProgress,
     protein_g: NutrientProgress,
@@ -623,6 +636,11 @@ struct GetGoalProgressRequest {
     /// Date in YYYY-MM-DD format. Defaults to today.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub date: Option<String>,
+    /// Widget presentation variant: 'compact' (default, single row of rings)
+    /// or 'expanded' (fuller card-grid daily summary). The data returned is
+    /// identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variant: Option<GoalProgressVariant>,
 }
 
 pub struct GetGoalProgress {
@@ -654,7 +672,7 @@ impl Operation for GetGoalProgress {
     }
 
     fn description(&self) -> &str {
-        "Get goal progress for a specific date (defaults to today). Returns per-nutrient consumed vs target comparison and weight progress."
+        "Get goal progress for a specific date (defaults to today). Returns per-nutrient consumed vs target comparison and weight progress. Accepts an optional `variant` ('compact' | 'expanded', default 'compact') selecting how the widget renders the result: 'compact' is a single row of small rings; 'expanded' is a fuller card-grid daily summary. Use 'expanded' when the user asks for a fuller view."
     }
 
     fn input_schema(&self) -> Option<serde_json::Value> {
@@ -677,6 +695,11 @@ impl Operation for GetGoalProgress {
 
         #[cfg(not(test))]
         let conn = Connection::open().await?;
+
+        // Resolve the presentation variant (echoed back in the response so
+        // the widget can branch on it); unknown strings already failed serde
+        // deserialization above as Validation("request", ...).
+        let variant = req.variant.unwrap_or(GoalProgressVariant::Compact);
 
         // Resolve query date. Reject anything that isn't a strict ISO
         // YYYY-MM-DD date: this value is echoed back verbatim in the response
@@ -766,6 +789,7 @@ impl Operation for GetGoalProgress {
 
         Ok(serde_json::to_value(GoalProgress {
             date: query_date,
+            variant,
             calories: calories_progress,
             protein_g: protein_g_progress,
             carbs_g: carbs_g_progress,
@@ -1515,5 +1539,52 @@ mod tests {
             .unwrap();
 
         assert!((result["fasting_hours"].as_f64().unwrap() - 36.0).abs() < f64::EPSILON);
+    }
+
+    // ---- GetGoalProgress: widget presentation variant (TASK-55) ----
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_goal_progress_variant_defaults_to_compact() {
+        let db = TempDb::new().await;
+        let clock = clock();
+        let op = GetGoalProgress::new(clock).with_db_path(db.path.clone());
+
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({})))
+            .await
+            .unwrap();
+
+        assert_eq!(result["variant"].as_str(), Some("compact"));
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_goal_progress_variant_expanded_echoed() {
+        let db = TempDb::new().await;
+        let clock = clock();
+        let op = GetGoalProgress::new(clock).with_db_path(db.path.clone());
+
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({ "variant": "expanded" })))
+            .await
+            .unwrap();
+
+        assert_eq!(result["variant"].as_str(), Some("expanded"));
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_goal_progress_invalid_variant_rejected() {
+        let db = TempDb::new().await;
+        let clock = clock();
+        let op = GetGoalProgress::new(clock).with_db_path(db.path.clone());
+
+        let err = op
+            .execute_json(Arc::new(serde_json::json!({ "variant": "huge" })))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.category, ErrorCategory::Validation);
     }
 }
