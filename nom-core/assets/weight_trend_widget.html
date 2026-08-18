@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light dark">
+<title>Weight Trend</title>
+<style>
+  :root {
+    --bg: light-dark(#ffffff, #171717);
+    --fg: light-dark(#171717, #fafafa);
+    --fg-muted: light-dark(#6b6b6b, #a3a3a3);
+    --border: light-dark(#e5e5e5, #333333);
+    --track: light-dark(#eeeeee, #262626);
+    --accent: light-dark(#2563eb, #60a5fa);
+    --toward: light-dark(#16a34a, #4ade80);
+    --away: light-dark(#dc2626, #f87171);
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans, var(--font));
+  }
+
+  body {
+    padding: 8px;
+  }
+
+  h1 {
+    font-size: 13px;
+    font-weight: 600;
+    margin: 0 0 4px 0;
+  }
+
+  .stats-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+
+  .latest {
+    font-size: 18px;
+    font-weight: 700;
+  }
+
+  .delta-chip {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: var(--track);
+    color: var(--fg-muted);
+  }
+
+  .delta-chip.toward { color: var(--toward); }
+  .delta-chip.away { color: var(--away); }
+
+  .first-note {
+    font-size: 11px;
+    color: var(--fg-muted);
+    margin: 0;
+  }
+
+  .chart {
+    display: block;
+    width: 100%;
+    height: auto;
+    overflow: visible;
+  }
+
+  .trend-line {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2;
+  }
+
+  .target-line {
+    stroke: var(--fg-muted);
+    stroke-width: 1;
+    stroke-dasharray: 3 2;
+  }
+
+  .trend-point {
+    fill: var(--accent);
+  }
+
+  .placeholder {
+    color: var(--fg-muted);
+    font-size: 13px;
+    padding: 12px 0;
+  }
+</style>
+</head>
+<body>
+  <div id="app">
+    <p class="placeholder">Waiting for weight trend data&hellip;</p>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------------
+  // Minimal JSON-RPC 2.0 over postMessage, per the MCP Apps spec's own
+  // "you don't need an SDK to talk MCP with the host" reference snippet
+  // (specification/2026-01-26/apps.mdx, "Transport Layer" section).
+  // ---------------------------------------------------------------------
+
+  var nextId = 1;
+  var pending = {};
+
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (!data || typeof data !== "object") return;
+
+    if (data.id !== undefined && pending[data.id]) {
+      var entry = pending[data.id];
+      delete pending[data.id];
+      if ("result" in data) {
+        entry.resolve(data.result);
+      } else if ("error" in data) {
+        entry.reject(new Error((data.error && data.error.message) || "RPC error"));
+      }
+      return;
+    }
+
+    if (data.method) {
+      var handlers = notificationHandlers[data.method];
+      if (handlers) {
+        handlers.forEach(function (h) { h(data.params || {}); });
+      }
+    }
+  });
+
+  function sendRequest(method, params) {
+    var id = nextId++;
+    return new Promise(function (resolve, reject) {
+      pending[id] = { resolve: resolve, reject: reject };
+      window.parent.postMessage({ jsonrpc: "2.0", id: id, method: method, params: params }, "*");
+    });
+  }
+
+  function sendNotification(method, params) {
+    window.parent.postMessage({ jsonrpc: "2.0", method: method, params: params }, "*");
+  }
+
+  var notificationHandlers = {};
+  function onNotification(method, handler) {
+    (notificationHandlers[method] = notificationHandlers[method] || []).push(handler);
+  }
+
+  // ---------------------------------------------------------------------
+  // Rendering
+  // ---------------------------------------------------------------------
+
+  var appEl = document.getElementById("app");
+  var SVG_NS = "http://www.w3.org/2000/svg";
+
+  function fmt(n) {
+    if (n === undefined || n === null) return "";
+    return Math.round(n * 10) / 10;
+  }
+
+  // Escapes a value for safe interpolation into innerHTML. Server-side
+  // validation constrains fields like `logged_date`, but the widget must not
+  // rely on that alone since it cannot verify who produced the tool result
+  // it renders.
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  // Axis-free sparkline of the chronological entries, with an optional
+  // dashed target line. The target participates in the min/max normalization
+  // so the line always lands inside the drawn range (same approach as the
+  // weekly-progress widget's weight chart).
+  function sparklineSvg(entries, target) {
+    var width = 320, height = 44;
+    var padLeft = 8, padRight = 8, padTop = 4, padBottom = 4;
+    var chartW = width - padLeft - padRight;
+    var chartH = height - padTop - padBottom;
+
+    var values = entries.map(function (e) { return e.value; });
+    var all = values.concat(target !== undefined && target !== null ? [target] : []);
+    var minVal = Math.min.apply(null, all);
+    var maxVal = Math.max.apply(null, all);
+    if (minVal === maxVal) { minVal -= 1; maxVal += 1; }
+
+    function yFor(v) {
+      return padTop + chartH - ((v - minVal) / (maxVal - minVal)) * chartH;
+    }
+
+    var svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("class", "chart");
+    svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+
+    if (target !== undefined && target !== null) {
+      var line = document.createElementNS(SVG_NS, "line");
+      line.setAttribute("class", "target-line");
+      line.setAttribute("x1", padLeft);
+      line.setAttribute("x2", padLeft + chartW);
+      line.setAttribute("y1", yFor(target));
+      line.setAttribute("y2", yFor(target));
+      svg.appendChild(line);
+    }
+
+    var n = values.length;
+    var step = chartW / (n - 1);
+    var pathD = values.map(function (v, i) {
+      return (i === 0 ? "M" : "L") + (padLeft + i * step) + "," + yFor(v);
+    }).join(" ");
+
+    var path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("class", "trend-line");
+    path.setAttribute("d", pathD);
+    svg.appendChild(path);
+
+    // End-of-series dot, with a tooltip naming the latest reading.
+    var last = entries[n - 1];
+    var circle = document.createElementNS(SVG_NS, "circle");
+    circle.setAttribute("class", "trend-point");
+    circle.setAttribute("cx", padLeft + (n - 1) * step);
+    circle.setAttribute("cy", yFor(last.value));
+    circle.setAttribute("r", 3);
+    var titleEl = document.createElementNS(SVG_NS, "title");
+    titleEl.textContent = last.logged_date + ": " + fmt(last.value);
+    circle.appendChild(titleEl);
+    svg.appendChild(circle);
+
+    return svg;
+  }
+
+  function render(data) {
+    var entries = data.entries || [];
+    var delta = data.delta || {};
+    var target = data.target_weight;
+
+    var html = "<h1>Weight Trend</h1>";
+
+    if (entries.length === 0) {
+      html += '<p class="placeholder">No weigh-ins yet</p>';
+      appEl.innerHTML = html;
+      reportSize();
+      return;
+    }
+
+    var latest = entries[entries.length - 1];
+
+    html += '<div class="stats-row">';
+    html += '<span class="latest">' + fmt(latest.value) + "</span>";
+    if (delta.value !== undefined && delta.value !== null) {
+      var cls = delta.movement === "toward_target"
+        ? "toward"
+        : delta.movement === "away_from_target"
+          ? "away"
+          : "neutral";
+      var sign = delta.value > 0 ? "+" : "";
+      var refTitle = delta.reference_date
+        ? "Change vs " + escapeHtml(delta.reference_date)
+        : "Change";
+      html += '<span class="delta-chip ' + cls + '" title="' + refTitle + '">'
+        + sign + fmt(delta.value) + "</span>";
+    }
+    html += "</div>";
+
+    if (entries.length === 1) {
+      html += '<p class="first-note">First weigh-in</p>';
+      appEl.innerHTML = html;
+      reportSize();
+      return;
+    }
+
+    appEl.innerHTML = html;
+    appEl.appendChild(sparklineSvg(entries, target));
+    reportSize();
+  }
+
+  function renderError(message) {
+    appEl.innerHTML = '<p class="placeholder">' + escapeHtml(message) + "</p>";
+  }
+
+  function extractWeightTrend(toolResult) {
+    if (!toolResult || !toolResult.content || !toolResult.content.length) return null;
+    var block = toolResult.content[0];
+    if (!block || typeof block.text !== "string") return null;
+    try {
+      return JSON.parse(block.text);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Theming: apply host-provided CSS variables/theme if present.
+  // ---------------------------------------------------------------------
+
+  function applyHostContext(ctx) {
+    if (!ctx) return;
+    if (ctx.theme === "light" || ctx.theme === "dark") {
+      document.documentElement.style.colorScheme = ctx.theme;
+    }
+    if (ctx.styles && ctx.styles.variables) {
+      Object.keys(ctx.styles.variables).forEach(function (key) {
+        var value = ctx.styles.variables[key];
+        if (value !== undefined && value !== null) {
+          document.documentElement.style.setProperty(key, value);
+        }
+      });
+    }
+  }
+
+  var lastSize = { width: 0, height: 0 };
+  function reportSize() {
+    var width = document.documentElement.scrollWidth;
+    var height = document.documentElement.scrollHeight;
+    if (width === lastSize.width && height === lastSize.height) return;
+    lastSize = { width: width, height: height };
+    sendNotification("ui/notifications/size-changed", { width: width, height: height });
+  }
+
+  if (typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(reportSize).observe(document.documentElement);
+  }
+
+  // ---------------------------------------------------------------------
+  // Handshake + lifecycle
+  // ---------------------------------------------------------------------
+
+  onNotification("ui/notifications/tool-input", function () {
+    // Arguments only; the rendered payload comes from tool-result.
+  });
+
+  onNotification("ui/notifications/tool-result", function (params) {
+    var data = extractWeightTrend(params);
+    if (data) {
+      render(data);
+    } else {
+      renderError("Unable to read weight trend result.");
+    }
+  });
+
+  onNotification("ui/notifications/tool-cancelled", function () {
+    renderError("Tool call was cancelled.");
+  });
+
+  onNotification("ui/notifications/host-context-changed", function (ctx) {
+    applyHostContext(ctx);
+  });
+
+  sendRequest("ui/initialize", {
+    appCapabilities: {},
+    appInfo: { name: "nom-mcp-weight-trend-widget", version: "1.0.0" },
+    protocolVersion: "2026-01-26"
+  }).then(function (result) {
+    applyHostContext(result && result.hostContext);
+    sendNotification("ui/notifications/initialized", {});
+  }).catch(function (err) {
+    renderError("Failed to initialize: " + err.message);
+  });
+})();
+</script>
+</body>
+</html>

@@ -61,6 +61,16 @@ const WEEKLY_PROGRESS_UI_RESOURCE_URI: &str = "ui://nom-mcp/weekly-progress";
 /// Same self-contained-HTML rationale as [`GOAL_PROGRESS_WIDGET_HTML`].
 const WEEKLY_PROGRESS_WIDGET_HTML: &str = include_str!("../../assets/weekly_progress_widget.html");
 
+/// URI of the MCP Apps UI resource for `get_weight_trend`'s widget.
+///
+/// Listed in `build_resources()`, same rationale as
+/// [`GOAL_PROGRESS_UI_RESOURCE_URI`].
+const WEIGHT_TREND_UI_RESOURCE_URI: &str = "ui://nom-mcp/weight-trend";
+
+/// Static widget HTML served for [`WEIGHT_TREND_UI_RESOURCE_URI`].
+/// Same self-contained-HTML rationale as [`GOAL_PROGRESS_WIDGET_HTML`].
+const WEIGHT_TREND_WIDGET_HTML: &str = include_str!("../../assets/weight_trend_widget.html");
+
 /// Cache TTLs (SEP-2549: `ReadResourceResult`/`ListToolsResult`/
 /// `ListResourcesResult` all carry a required `ttlMs`/`cacheScope` pair once
 /// a client negotiates a protocol version that mandates them — omitting them
@@ -101,6 +111,15 @@ fn goal_progress_ui_meta(domain: Option<&str>) -> rmcp::model::MetaObject {
 /// See [`goal_progress_ui_meta`] for the `domain` caveat.
 fn weekly_progress_ui_meta(domain: Option<&str>) -> rmcp::model::MetaObject {
     ui_meta(WEEKLY_PROGRESS_UI_RESOURCE_URI, domain)
+}
+
+/// Build the `_meta.ui` object that points a Tool declaration at
+/// [`WEIGHT_TREND_UI_RESOURCE_URI`], per the MCP Apps extension
+/// (SEP-1865 / modelcontextprotocol/ext-apps spec 2026-01-26).
+///
+/// See [`goal_progress_ui_meta`] for the `domain` caveat.
+fn weight_trend_ui_meta(domain: Option<&str>) -> rmcp::model::MetaObject {
+    ui_meta(WEIGHT_TREND_UI_RESOURCE_URI, domain)
 }
 
 fn ui_meta(resource_uri: &str, domain: Option<&str>) -> rmcp::model::MetaObject {
@@ -217,10 +236,11 @@ impl McpHandler {
             .collect()
     }
 
-    /// Build the tool list, additionally gating `get_goal_progress`'s and
-    /// `get_weekly_progress`'s MCP Apps `_meta.ui` pointers on the shared
-    /// widget-display setting (TASK-41) and on the requesting client not
-    /// being in the configured blocklist (`ui_blocked_clients`, TASK-53).
+    /// Build the tool list, additionally gating the widget tools'
+    /// (`get_goal_progress`, `get_weekly_progress`, `get_weight_trend`) MCP
+    /// Apps `_meta.ui` pointers on the shared widget-display setting
+    /// (TASK-41) and on the requesting client not being in the configured
+    /// blocklist (`ui_blocked_clients`, TASK-53).
     ///
     /// `requesting_client_name` takes a bare `Option<&str>` rather than the
     /// `RequestContext<RoleServer>` it's ultimately sourced from (mirroring
@@ -268,6 +288,7 @@ impl McpHandler {
                 match tool.name.as_ref() {
                     "get_goal_progress" => tool.meta = Some(goal_progress_ui_meta(domain)),
                     "get_weekly_progress" => tool.meta = Some(weekly_progress_ui_meta(domain)),
+                    "get_weight_trend" => tool.meta = Some(weight_trend_ui_meta(domain)),
                     _ => {}
                 }
             }
@@ -296,7 +317,7 @@ impl McpHandler {
 
     /// Build the list of MCP resources this handler exposes.
     ///
-    /// The two `ui://` widgets are listed even though the MCP Apps spec
+    /// The three `ui://` widgets are listed even though the MCP Apps spec
     /// allows omitting UI-only resources from `resources/list` (discovery is
     /// primarily via each tool's `_meta.ui.resourceUri`): some hosts
     /// cross-check a tool's `resourceUri` against the resource listing before
@@ -315,6 +336,10 @@ impl McpHandler {
             Resource::new(WEEKLY_PROGRESS_UI_RESOURCE_URI, "weekly_progress")
                 .with_title("Weekly Progress")
                 .with_description("Interactive weekly progress widget (MCP Apps UI)")
+                .with_mime_type("text/html;profile=mcp-app"),
+            Resource::new(WEIGHT_TREND_UI_RESOURCE_URI, "weight_trend")
+                .with_title("Weight Trend")
+                .with_description("Weight trend sparkline widget (MCP Apps UI)")
                 .with_mime_type("text/html;profile=mcp-app"),
         ]
     }
@@ -398,6 +423,18 @@ impl McpHandler {
                     uri: uri.to_string(),
                     mime_type: Some("text/html;profile=mcp-app".to_string()),
                     text: WEEKLY_PROGRESS_WIDGET_HTML.to_string(),
+                    meta: Some(self.ui_contents_meta(uri)),
+                };
+                Ok(ReadResourceResult::new(vec![contents])
+                    .with_ttl_ms(WIDGET_HTML_TTL_MS)
+                    .with_cache_scope(CacheScope::Public))
+            }
+            WEIGHT_TREND_UI_RESOURCE_URI => {
+                // Same static-shell rationale as GOAL_PROGRESS_UI_RESOURCE_URI above.
+                let contents = ResourceContents::TextResourceContents {
+                    uri: uri.to_string(),
+                    mime_type: Some("text/html;profile=mcp-app".to_string()),
+                    text: WEIGHT_TREND_WIDGET_HTML.to_string(),
                     meta: Some(self.ui_contents_meta(uri)),
                 };
                 Ok(ReadResourceResult::new(vec![contents])
@@ -774,7 +811,7 @@ mod tests {
         let clock = Clock { tz: chrono_tz::UTC };
         let handler = McpHandler::new(Arc::new(OperationRegistry::new(make_clock())), clock);
         let resources = handler.build_resources();
-        assert_eq!(resources.len(), 3);
+        assert_eq!(resources.len(), 4);
         assert_eq!(resources[0].uri, "nom://weekly-summary");
         assert_eq!(resources[0].title.as_deref(), Some("Weekly Summary"));
         assert_eq!(resources[0].mime_type.as_deref(), Some("application/json"));
@@ -788,6 +825,16 @@ mod tests {
         assert_eq!(resources[2].title.as_deref(), Some("Weekly Progress"));
         assert_eq!(
             resources[2].mime_type.as_deref(),
+            Some("text/html;profile=mcp-app")
+        );
+        assert_eq!(resources[3].uri, WEIGHT_TREND_UI_RESOURCE_URI);
+        assert_eq!(resources[3].title.as_deref(), Some("Weight Trend"));
+        assert_eq!(
+            resources[3].description.as_deref(),
+            Some("Weight trend sparkline widget (MCP Apps UI)")
+        );
+        assert_eq!(
+            resources[3].mime_type.as_deref(),
             Some("text/html;profile=mcp-app")
         );
     }
@@ -835,7 +882,10 @@ mod tests {
         reg.register(Arc::new(
             crate::weekly::GetWeeklyProgress::new(clock).with_db_path(db_path.clone()),
         ));
-        // A third, unrelated tool proves the gate is scoped to the two
+        reg.register(Arc::new(
+            crate::weight::GetWeightTrend::new(clock).with_db_path(db_path.clone()),
+        ));
+        // A fourth, unrelated tool proves the gate is scoped to the
         // widget-backed tools and doesn't leak onto every tool.
         reg.register(Arc::new(TestOp));
         McpHandler::new(Arc::new(reg), clock).with_db_path(db_path)
@@ -852,7 +902,11 @@ mod tests {
 
         let tools = handler.build_tools_gated(None).await;
 
-        for name in ["get_goal_progress", "get_weekly_progress"] {
+        for name in [
+            "get_goal_progress",
+            "get_weekly_progress",
+            "get_weight_trend",
+        ] {
             let tool = tools
                 .iter()
                 .find(|t| t.name.as_ref() == name)
@@ -867,8 +921,8 @@ mod tests {
         assert!(test_op.meta.is_none());
     }
 
-    /// AC#1: with `widget_display_enabled = true`, both `get_goal_progress`
-    /// and `get_weekly_progress` tool declarations carry `_meta.ui.resourceUri`
+    /// AC#1: with `widget_display_enabled = true`, all three widget-backed
+    /// tools' declarations carry `_meta.ui.resourceUri`
     /// pointing at their respective registered `ui://` resources — and no
     /// other tool is affected.
     #[serial_test::serial]
@@ -888,6 +942,7 @@ mod tests {
         for (name, uri) in [
             ("get_goal_progress", GOAL_PROGRESS_UI_RESOURCE_URI),
             ("get_weekly_progress", WEEKLY_PROGRESS_UI_RESOURCE_URI),
+            ("get_weight_trend", WEIGHT_TREND_UI_RESOURCE_URI),
         ] {
             let tool = tools
                 .iter()
@@ -900,8 +955,8 @@ mod tests {
             );
         }
 
-        // Scoped to the two widget-backed tools only — the other registered
-        // tool is untouched.
+        // Scoped to the three widget-backed tools only — the other
+        // registered tool is untouched.
         let test_op = tools
             .iter()
             .find(|t| t.name.as_ref() == "test-op")
@@ -929,7 +984,11 @@ mod tests {
         let handler = handler_with_goal_progress(db.path.clone())
             .with_ui_blocked_clients(vec!["claude-ios".to_string()]);
 
-        let widget_tools = ["get_goal_progress", "get_weekly_progress"];
+        let widget_tools = [
+            "get_goal_progress",
+            "get_weekly_progress",
+            "get_weight_trend",
+        ];
 
         // Blocked client (exact and case-differing forms): no _meta.ui.
         for name in [Some("claude-ios"), Some("CLAUDE-IOS")] {
@@ -1038,6 +1097,37 @@ mod tests {
         // Size reporting is load-bearing for hosts that size the iframe from
         // the widget's own reports (TASK-56); guard against it being lost.
         assert!(text.contains("ui/notifications/size-changed"));
+    }
+
+    /// Same as `test_dispatch_read_resource_goal_progress_widget` above, but
+    /// for the weight-trend widget's `ui://` resource.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_dispatch_read_resource_weight_trend_widget() {
+        let clock = Clock { tz: chrono_tz::UTC };
+        let handler = McpHandler::new(Arc::new(OperationRegistry::new(make_clock())), clock);
+
+        let result = handler
+            .dispatch_read_resource(WEIGHT_TREND_UI_RESOURCE_URI)
+            .await;
+        assert!(result.is_ok());
+        let ReadResourceResult { contents, .. } = result.unwrap();
+        let ResourceContents::TextResourceContents {
+            mime_type, text, ..
+        } = &contents[0]
+        else {
+            panic!("expected text contents")
+        };
+        assert_eq!(mime_type.as_deref(), Some("text/html;profile=mcp-app"));
+        assert!(!text.is_empty());
+        assert!(text.contains("<!DOCTYPE html>"));
+        // Size reporting is load-bearing for hosts that size the iframe from
+        // the widget's own reports; guard against it being lost.
+        assert!(text.contains("ui/notifications/size-changed"));
+        // The widget must be self-contained: no external script/style fetches
+        // (the restrictive default CSP blocks them anyway).
+        assert!(!text.contains("<script src"));
+        assert!(!text.contains("<link"));
     }
 
     /// AC#3: `call_tool("get_goal_progress")` returns byte-identical content
@@ -1197,7 +1287,11 @@ mod tests {
             .with_ui_domain(Some("abc123def456.claudemcpcontent.com".to_string()));
         let tools = handler.build_tools_gated(None).await;
 
-        for name in ["get_goal_progress", "get_weekly_progress"] {
+        for name in [
+            "get_goal_progress",
+            "get_weekly_progress",
+            "get_weight_trend",
+        ] {
             let tool = tools
                 .iter()
                 .find(|t| t.name.as_ref() == name)

@@ -1,8 +1,8 @@
 //! Weight entry operations — log, update, delete, and query by date.
 //!
 //! Implements `log_weight`, `update_weight_entry`, `delete_weight_entry`,
-//! `get_weight_today`, `get_weight_by_date`, and `get_weight_by_date_range`
-//! per doc-5 §5, §13.
+//! `get_weight_today`, `get_weight_by_date`, `get_weight_by_date_range`, and
+//! `get_weight_trend` per doc-5 §5, §13.
 //!
 //! Weight entries are simple: no FK relationships, no snapshotting, no computed
 //! totals — just raw value storage with temporal handling. All deletes are
@@ -10,13 +10,13 @@
 
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::clock::Clock;
 use crate::error::ErrorData;
-use crate::operation::Operation;
+use crate::operation::{Operation, Surfaces};
 use crate::storage::Connection;
 
 // ---------------------------------------------------------------------------
@@ -758,6 +758,281 @@ impl Operation for GetWeightByDateRange {
 }
 
 // ---------------------------------------------------------------------------
+// GetWeightTrend Operation (MCP-only — backs the weight-trend widget)
+// ---------------------------------------------------------------------------
+
+/// Number of most-recent weight entries returned by `get_weight_trend`.
+const WEIGHT_TREND_ENTRY_LIMIT: i64 = 30;
+
+/// Days back from the latest entry's date that the week-over-week delta's
+/// baseline must be dated on or before (falls back to the earliest entry when
+/// no such entry exists).
+const WEIGHT_TREND_BASELINE_DAYS: u64 = 7;
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct GetWeightTrendRequest {}
+
+/// One fetched weight sample, in the shape the pure trend computation needs.
+#[derive(Debug, Clone, Copy)]
+struct TrendSample {
+    logged_at: DateTime<Utc>,
+    logged_date: NaiveDate,
+    value: f64,
+}
+
+/// A single point in the response's `entries` array (chronological order).
+#[derive(Debug, Clone, serde::Serialize)]
+struct TrendEntryPoint {
+    #[serde(rename = "logged_date")]
+    logged_date: String,
+    value: f64,
+}
+
+/// Signed week-over-week delta plus its movement relative to the target
+/// weight. All three fields are null when fewer than two entries exist (no
+/// baseline to compare against).
+#[derive(Debug, Clone, serde::Serialize)]
+struct WeightTrendDelta {
+    value: Option<f64>,
+    #[serde(rename = "reference_date")]
+    reference_date: Option<String>,
+    /// `"toward_target"` / `"away_from_target"` / `"neutral"`. Deliberately
+    /// not named "direction" — that term is reserved for the nutrient
+    /// `Goal::Direction` enum (CONTEXT.md); weight progress carries no
+    /// Direction, it is read directly off the comparison to the target.
+    movement: Option<&'static str>,
+}
+
+/// Full `get_weight_trend` response shape. Nulls are explicit so the widget
+/// has a stable contract to branch on (absent target, absent delta).
+#[derive(Debug, Clone, serde::Serialize)]
+struct WeightTrendResponse {
+    entries: Vec<TrendEntryPoint>,
+    delta: WeightTrendDelta,
+    #[serde(rename = "target_weight")]
+    target_weight: Option<f64>,
+}
+
+/// Compute the week-over-week delta and its movement relative to the target
+/// weight, from fetched samples plus the active goal's target weight (if
+/// any). Pure and DB-free so the rules are unit-testable in isolation:
+///
+/// - `current` is the entry with the max `logged_at`;
+/// - the baseline is the entry with the max `logged_at` among those dated on
+///   or before `current.logged_date - 7 days`, falling back to the earliest
+///   entry when none qualifies;
+/// - with fewer than two entries there is no baseline, so all delta fields
+///   are null;
+/// - `movement` is neutral when there is no target, when current is at the
+///   target (same 1e-9 tolerance as `goal::weight_progress`), or when the
+///   delta is zero; otherwise toward/away by whether the delta's sign matches
+///   the sign of `target - current`. Works symmetrically for loss and gain
+///   goals.
+fn compute_weight_trend(samples: &[TrendSample], target_weight: Option<f64>) -> WeightTrendDelta {
+    if samples.len() < 2 {
+        return WeightTrendDelta {
+            value: None,
+            reference_date: None,
+            movement: None,
+        };
+    }
+
+    // `max_by`/`min_by` resolve timestamp ties deterministically (last / first
+    // occurrence), so with >= 2 samples the baseline never pairs an entry
+    // with itself.
+    let current = samples
+        .iter()
+        .max_by(|a, b| a.logged_at.cmp(&b.logged_at))
+        .unwrap();
+    let cutoff = current.logged_date - chrono::Days::new(WEIGHT_TREND_BASELINE_DAYS);
+
+    let baseline = samples
+        .iter()
+        .filter(|s| s.logged_date <= cutoff)
+        .max_by(|a, b| a.logged_at.cmp(&b.logged_at))
+        .unwrap_or_else(|| {
+            samples
+                .iter()
+                .min_by(|a, b| a.logged_at.cmp(&b.logged_at))
+                .unwrap()
+        });
+
+    let value = current.value - baseline.value;
+
+    let movement = match target_weight {
+        Some(target) if (current.value - target).abs() >= 1e-9 => {
+            if value == 0.0 {
+                "neutral"
+            } else if (value > 0.0) == (target - current.value > 0.0) {
+                "toward_target"
+            } else {
+                "away_from_target"
+            }
+        }
+        _ => "neutral",
+    };
+
+    WeightTrendDelta {
+        value: Some(value),
+        reference_date: Some(Clock::format_date(baseline.logged_date)),
+        movement: Some(movement),
+    }
+}
+
+/// Fetch the active goal's `target_weight` as-of a given date (the most
+/// recent goal row whose `effective_from <= as_of_date`), mirroring the query
+/// pattern in `goal`/`weekly`. `None` when no goal row exists or the active
+/// goal has no target weight set.
+async fn fetch_active_target_weight(
+    conn: &Connection,
+    as_of_date: &str,
+) -> Result<Option<f64>, ErrorData> {
+    let sql = r#"
+        SELECT target_weight
+        FROM goals
+        WHERE effective_from <= ?
+        ORDER BY effective_from DESC
+        LIMIT 1
+    "#;
+    let mut stmt = conn
+        .prepare(sql)
+        .await
+        .map_err(|e| ErrorData::storage_failure(format!("prepare failed: {e}")))?;
+    let mut rows = stmt
+        .query((as_of_date,))
+        .await
+        .map_err(|e| ErrorData::storage_failure(format!("query failed: {e}")))?;
+
+    match rows
+        .next()
+        .await
+        .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
+    {
+        Some(row) => Ok(row.get_value(0).ok().and_then(|v| match v {
+            turso::Value::Real(r) => Some(r),
+            _ => None,
+        })),
+        None => Ok(None),
+    }
+}
+
+pub struct GetWeightTrend {
+    clock: Clock,
+    #[cfg(test)]
+    db_path: Option<std::path::PathBuf>,
+}
+
+impl GetWeightTrend {
+    pub fn new(clock: Clock) -> Self {
+        Self {
+            clock,
+            #[cfg(test)]
+            db_path: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_db_path(mut self, path: std::path::PathBuf) -> Self {
+        self.db_path = Some(path);
+        self
+    }
+}
+
+#[async_trait::async_trait]
+impl Operation for GetWeightTrend {
+    fn name(&self) -> &str {
+        "get_weight_trend"
+    }
+
+    fn description(&self) -> &str {
+        "Get the most recent weight entries (up to 30, oldest first) plus the signed week-over-week delta and its movement relative to the target weight. Backs the weight-trend widget."
+    }
+
+    fn surfaces(&self) -> Surfaces {
+        Surfaces::MCP
+    }
+
+    fn input_schema(&self) -> Option<serde_json::Value> {
+        serde_json::to_value(schemars::schema_for!(GetWeightTrendRequest)).ok()
+    }
+
+    async fn execute_json(
+        &self,
+        _args: Arc<serde_json::Value>,
+    ) -> Result<serde_json::Value, ErrorData> {
+        #[cfg(test)]
+        let conn = if let Some(ref path) = self.db_path {
+            Connection::open_at(path).await?
+        } else {
+            Connection::open().await?
+        };
+
+        #[cfg(not(test))]
+        let conn = Connection::open().await?;
+
+        // Most recent N entries, newest-first from SQL; reversed below so the
+        // sparkline draws chronologically (oldest first).
+        let sql = "SELECT id, logged_at, logged_date, value FROM weight_entries \
+                   ORDER BY logged_at DESC LIMIT ?";
+        let mut stmt = conn
+            .prepare(sql)
+            .await
+            .map_err(|e| ErrorData::storage_failure(format!("prepare failed: {e}")))?;
+        let mut rows = stmt
+            .query((WEIGHT_TREND_ENTRY_LIMIT,))
+            .await
+            .map_err(|e| ErrorData::storage_failure(format!("query failed: {e}")))?;
+
+        let mut samples: Vec<TrendSample> = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
+        {
+            let logged_at: String = row
+                .get::<String>(1)
+                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+            let logged_date: String = row
+                .get::<String>(2)
+                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+            let value: f64 = row
+                .get::<f64>(3)
+                .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+            samples.push(TrendSample {
+                logged_at: logged_at.parse::<DateTime<Utc>>().map_err(|e| {
+                    ErrorData::storage_failure(format!("invalid stored logged_at: {e}"))
+                })?,
+                logged_date: NaiveDate::parse_from_str(&logged_date, "%Y-%m-%d").map_err(|e| {
+                    ErrorData::storage_failure(format!("invalid stored logged_date: {e}"))
+                })?,
+                value,
+            });
+        }
+        samples.reverse();
+
+        let today_str = Clock::format_date(self.clock.today());
+        let target_weight = fetch_active_target_weight(&conn, &today_str).await?;
+
+        let delta = compute_weight_trend(&samples, target_weight);
+
+        let entries = samples
+            .iter()
+            .map(|s| TrendEntryPoint {
+                logged_date: Clock::format_date(s.logged_date),
+                value: s.value,
+            })
+            .collect();
+
+        Ok(serde_json::to_value(WeightTrendResponse {
+            entries,
+            delta,
+            target_weight,
+        })
+        .map_err(|e| ErrorData::storage_failure(format!("serialization failed: {e}")))?)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1240,5 +1515,299 @@ mod tests {
             entries[2]["logged_at"].as_str().unwrap(),
             "2025-01-05T08:00:00Z"
         );
+    }
+
+    // ---- GetWeightTrend tests (AC #2, #3, #5) ----
+
+    /// Build a [`TrendSample`] from a YYYY-MM-DD date, HH:MM:SS time, and value.
+    fn trend_sample(date: &str, time: &str, value: f64) -> TrendSample {
+        TrendSample {
+            logged_at: format!("{date}T{time}Z").parse().unwrap(),
+            logged_date: date.parse().unwrap(),
+            value,
+        }
+    }
+
+    // ---- Pure delta/movement unit tests (no I/O) ----
+
+    #[test]
+    fn test_compute_weight_trend_zero_entries() {
+        let d = compute_weight_trend(&[], Some(75.0));
+        assert!(d.value.is_none());
+        assert!(d.reference_date.is_none());
+        assert!(d.movement.is_none());
+    }
+
+    #[test]
+    fn test_compute_weight_trend_one_entry() {
+        let samples = [trend_sample("2025-01-15", "10:00:00", 76.0)];
+        let d = compute_weight_trend(&samples, Some(75.0));
+        assert!(d.value.is_none());
+        assert!(d.reference_date.is_none());
+        assert!(d.movement.is_none());
+    }
+
+    #[test]
+    fn test_compute_weight_trend_fallback_to_earliest_within_seven_days() {
+        // Both entries within 7 days of each other: no entry qualifies as a
+        // baseline (dated <= current - 7d), so the earliest is used.
+        let samples = [
+            trend_sample("2025-01-15", "10:00:00", 76.0),
+            trend_sample("2025-01-18", "09:00:00", 75.5),
+        ];
+        let d = compute_weight_trend(&samples, Some(75.0));
+        assert_eq!(d.value, Some(-0.5));
+        assert_eq!(d.reference_date.as_deref(), Some("2025-01-15"));
+        // Losing weight toward a lower target: toward_target.
+        assert_eq!(d.movement, Some("toward_target"));
+    }
+
+    #[test]
+    fn test_compute_weight_trend_exact_seven_day_baseline() {
+        // Baseline dated exactly 7 days before current qualifies.
+        let samples = [
+            trend_sample("2025-01-11", "08:00:00", 76.0),
+            trend_sample("2025-01-18", "09:00:00", 75.5),
+        ];
+        let d = compute_weight_trend(&samples, Some(75.0));
+        assert_eq!(d.value, Some(-0.5));
+        assert_eq!(d.reference_date.as_deref(), Some("2025-01-11"));
+    }
+
+    #[test]
+    fn test_compute_weight_trend_nearest_baseline_at_or_before_cutoff() {
+        // 2025-01-12 is after the cutoff (2025-01-11) and must be skipped;
+        // the newest entry at or before the cutoff (01-11 12:00) wins over
+        // the older 01-10 entry.
+        let samples = [
+            trend_sample("2025-01-10", "08:00:00", 77.0),
+            trend_sample("2025-01-11", "12:00:00", 76.0),
+            trend_sample("2025-01-12", "08:00:00", 76.2),
+            trend_sample("2025-01-18", "09:00:00", 75.5),
+        ];
+        let d = compute_weight_trend(&samples, Some(75.0));
+        assert_eq!(d.value, Some(-0.5));
+        assert_eq!(d.reference_date.as_deref(), Some("2025-01-11"));
+    }
+
+    #[test]
+    fn test_compute_weight_trend_loss_goal_toward_and_away() {
+        // Loss goal (target below current): falling = toward, rising = away.
+        let toward = [
+            trend_sample("2025-01-11", "08:00:00", 76.5),
+            trend_sample("2025-01-18", "09:00:00", 76.0),
+        ];
+        assert_eq!(
+            compute_weight_trend(&toward, Some(75.0)).movement,
+            Some("toward_target")
+        );
+
+        let away = [
+            trend_sample("2025-01-11", "08:00:00", 75.5),
+            trend_sample("2025-01-18", "09:00:00", 76.0),
+        ];
+        assert_eq!(
+            compute_weight_trend(&away, Some(75.0)).movement,
+            Some("away_from_target")
+        );
+    }
+
+    #[test]
+    fn test_compute_weight_trend_gain_goal_toward_and_away() {
+        // Gain goal (target above current): rising = toward, falling = away.
+        let toward = [
+            trend_sample("2025-01-11", "08:00:00", 77.5),
+            trend_sample("2025-01-18", "09:00:00", 78.0),
+        ];
+        assert_eq!(
+            compute_weight_trend(&toward, Some(80.0)).movement,
+            Some("toward_target")
+        );
+
+        let away = [
+            trend_sample("2025-01-11", "08:00:00", 78.5),
+            trend_sample("2025-01-18", "09:00:00", 78.0),
+        ];
+        assert_eq!(
+            compute_weight_trend(&away, Some(80.0)).movement,
+            Some("away_from_target")
+        );
+    }
+
+    #[test]
+    fn test_compute_weight_trend_at_target_is_neutral() {
+        // Current equals the target (within tolerance): neutral regardless of
+        // a nonzero delta.
+        let samples = [
+            trend_sample("2025-01-11", "08:00:00", 76.5),
+            trend_sample("2025-01-18", "09:00:00", 76.0),
+        ];
+        let d = compute_weight_trend(&samples, Some(76.0));
+        assert_eq!(d.value, Some(-0.5));
+        assert_eq!(d.movement, Some("neutral"));
+    }
+
+    #[test]
+    fn test_compute_weight_trend_no_target_is_neutral() {
+        let samples = [
+            trend_sample("2025-01-11", "08:00:00", 76.5),
+            trend_sample("2025-01-18", "09:00:00", 76.0),
+        ];
+        let d = compute_weight_trend(&samples, None);
+        assert_eq!(d.value, Some(-0.5));
+        assert_eq!(d.movement, Some("neutral"));
+    }
+
+    #[test]
+    fn test_compute_weight_trend_zero_delta_is_neutral() {
+        // Unchanged weight with a reachable target: neutral, not toward/away.
+        let samples = [
+            trend_sample("2025-01-11", "08:00:00", 76.0),
+            trend_sample("2025-01-18", "09:00:00", 76.0),
+        ];
+        let d = compute_weight_trend(&samples, Some(75.0));
+        assert_eq!(d.value, Some(0.0));
+        assert_eq!(d.movement, Some("neutral"));
+    }
+
+    #[test]
+    fn test_compute_weight_trend_thirty_samples() {
+        // 30 daily samples: the cap-sized input computes against the newest
+        // entry at or before the 7-day cutoff, not the overall earliest.
+        let samples: Vec<TrendSample> = (0..30)
+            .map(|i| {
+                let date = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap()
+                    + chrono::Days::new(i as u64);
+                trend_sample(&Clock::format_date(date), "08:00:00", 70.0 + i as f64 * 0.1)
+            })
+            .collect();
+        let d = compute_weight_trend(&samples, Some(70.0));
+        // current = Jan 30 (value 72.9); cutoff = Jan 23; baseline = Jan 23
+        // (value 72.2).
+        assert!((d.value.unwrap() - 0.7).abs() < 1e-9);
+        assert_eq!(d.reference_date.as_deref(), Some("2025-01-23"));
+        assert_eq!(d.movement, Some("away_from_target"));
+    }
+
+    // ---- GetWeightTrend integration tests (execute_json vs TempDb) ----
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_weight_trend_empty_db() {
+        let db = TempDb::new().await;
+        let op = GetWeightTrend::new(clock()).with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({})))
+            .await
+            .unwrap();
+
+        assert!(result["entries"].as_array().unwrap().is_empty());
+        assert!(result["delta"]["value"].is_null());
+        assert!(result["delta"]["reference_date"].is_null());
+        assert!(result["delta"]["movement"].is_null());
+        assert!(result["target_weight"].is_null());
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_weight_trend_end_to_end_shape_with_target() {
+        let db = TempDb::new().await;
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        seed_entry(&conn, "2025-01-11T08:00:00Z", "2025-01-11", 76.0).await;
+        seed_entry(&conn, "2025-01-18T09:00:00Z", "2025-01-18", 75.5).await;
+        conn.execute(
+            "INSERT INTO goals (effective_from, target_weight) VALUES ('2025-01-01', 75.0)",
+            (),
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        let op = GetWeightTrend::new(clock()).with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({})))
+            .await
+            .unwrap();
+
+        // Entries chronological (oldest first), projected to date+value only.
+        let entries = result["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["logged_date"].as_str(), Some("2025-01-11"));
+        assert_eq!(entries[0]["value"].as_f64(), Some(76.0));
+        assert_eq!(entries[1]["logged_date"].as_str(), Some("2025-01-18"));
+        assert_eq!(entries[1]["value"].as_f64(), Some(75.5));
+        assert!(entries[0].get("id").is_none());
+        assert!(entries[0].get("logged_at").is_none());
+
+        // Delta: 7-day-exact baseline, falling toward the lower target.
+        assert_eq!(result["delta"]["value"].as_f64(), Some(-0.5));
+        assert_eq!(
+            result["delta"]["reference_date"].as_str(),
+            Some("2025-01-11")
+        );
+        assert_eq!(result["delta"]["movement"].as_str(), Some("toward_target"));
+
+        // Target joined from the active goal.
+        assert_eq!(result["target_weight"].as_f64(), Some(75.0));
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_weight_trend_multiple_entries_same_date() {
+        let db = TempDb::new().await;
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        // Two weigh-ins on the same date: both surface, and the later
+        // timestamp is the current reading.
+        seed_entry(&conn, "2025-01-18T08:00:00Z", "2025-01-18", 75.2).await;
+        seed_entry(&conn, "2025-01-18T18:00:00Z", "2025-01-18", 75.0).await;
+        drop(conn);
+
+        let op = GetWeightTrend::new(clock()).with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({})))
+            .await
+            .unwrap();
+
+        let entries = result["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1]["value"].as_f64(), Some(75.0));
+        // Fallback baseline is the earlier same-day entry.
+        let delta_value = result["delta"]["value"].as_f64().unwrap();
+        assert!((delta_value - (-0.2)).abs() < 1e-9);
+        assert_eq!(
+            result["delta"]["reference_date"].as_str(),
+            Some("2025-01-18")
+        );
+        // No goal row: neutral movement, null target.
+        assert_eq!(result["delta"]["movement"].as_str(), Some("neutral"));
+        assert!(result["target_weight"].is_null());
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_weight_trend_caps_at_thirty_entries() {
+        let db = TempDb::new().await;
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        // 35 daily entries; only the 30 most recent may come back.
+        for i in 0..35u32 {
+            let date =
+                chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap() + chrono::Days::new(i as u64);
+            let ts = format!("{}T08:00:00Z", Clock::format_date(date));
+            seed_entry(&conn, &ts, &Clock::format_date(date), 70.0 + i as f64 * 0.1).await;
+        }
+        drop(conn);
+
+        let op = GetWeightTrend::new(clock()).with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({})))
+            .await
+            .unwrap();
+
+        let entries = result["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 30);
+        // Oldest surviving entry is the 6th inserted (Jan 6); the five
+        // oldest (Jan 1-5) were cut by the cap. Newest is Jan 1 + 34d.
+        assert_eq!(entries[0]["logged_date"].as_str(), Some("2025-01-06"));
+        assert_eq!(entries[29]["logged_date"].as_str(), Some("2025-02-04"));
     }
 }

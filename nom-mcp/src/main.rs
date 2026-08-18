@@ -20,8 +20,8 @@ use nom_core::operation::{OperationRegistry, cli_router};
 use nom_core::seed::SeedData;
 use nom_core::weekly::GetWeeklyProgress;
 use nom_core::weight::{
-    DeleteWeightEntry, GetWeightByDate, GetWeightByDateRange, GetWeightToday, LogWeight,
-    UpdateWeightEntry,
+    DeleteWeightEntry, GetWeightByDate, GetWeightByDateRange, GetWeightToday, GetWeightTrend,
+    LogWeight, UpdateWeightEntry,
 };
 use nom_core::widget::{GetWidgetDisplay, SetWidgetDisplay};
 
@@ -119,6 +119,9 @@ fn build_registry(
 
     // Register weekly progress operation (MCP-only)
     registry.register(Arc::new(GetWeeklyProgress::new(*clock)));
+
+    // Register weight trend operation (MCP-only — backs the weight-trend widget)
+    registry.register(Arc::new(GetWeightTrend::new(*clock)));
 
     // Register seed data operation (CLI-only dev tooling)
     registry.register(Arc::new(SeedData::new(*clock)));
