@@ -36,6 +36,7 @@
  * flag we don't touch.
  */
 
+import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -71,6 +72,24 @@ const PI_INTERCOM_EXTENSION = join(
   homedir(),
   ".pi/agent/npm/node_modules/pi-intercom/index.ts",
 );
+
+/**
+ * @gotgenes/pi-subagents entry point, resolved across pi's versioned package trees
+ * (newest first). Lets executors delegate multi-image work — widget screenshot
+ * verification — to nested subagents, each with a fresh context, instead of reading
+ * >4 screenshots into their own context and tripping the vLLM
+ * --limit-mm-per-prompt image=4 hard cap (HTTP 400). Verified end-to-end 2026-08-18:
+ * a --no-extensions parent with this -e flag spawns in-process children that load
+ * the parent's extensions (minus the recursion-guarded dispatch tools) and can read
+ * images fine.
+ */
+function resolvePiSubagentsExtension(): string | null {
+  for (const tree of ["npm3", "npm2", "npm"]) {
+    const p = join(homedir(), ".pi/agent", tree, "node_modules/@gotgenes/pi-subagents/src/index.ts");
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
 
 const DEFAULT_ITERATIONS = 16;
 const DEFAULT_REVIEW_EVERY = 3;
@@ -644,17 +663,32 @@ async function doExecute(
 ): Promise<boolean> {
   setCurrentStep(ctx, state, `executing ${ticket.id}`, EXECUTE_TIMEOUT_MS);
   const shaBefore = await currentHeadSha(pi, cwd);
+  // Screenshot-cap guard: without the subagent tool, visual verification reads every
+  // rendered screenshot into the executor's own context and dies at 5 images (vLLM
+  // 4-image cap) — confirmed killer of TASK-55/57 runs. When the package can't be
+  // resolved, degrade gracefully with an explicit fallback instruction rather than
+  // silently losing the capability.
+  const subagentsExt = resolvePiSubagentsExtension();
+  const screenshotGuidance = subagentsExt
+    ? dedent`
+        Widget visual verification: never read more than 4 screenshots into your own session (the model provider rejects prompts with >4 images). Delegate screenshot review to subagent calls — one subagent per batch of <=4 images, each reporting findings back as text.
+      `
+    : dedent`
+        Widget visual verification: the subagent tool is NOT available in this session. Never read more than 4 screenshots into your own context (the model provider rejects prompts with >4 images). Instead verify each batch of <=4 screenshots with a separate headless \`pi -p\` call that instructs the fresh process to read the image files with the read tool and report findings as text — each call starts from a clean context, so the 4-image cap is never exceeded.
+      `;
   const result = await runHeadless(
     pi,
     cwd,
     dedent`
       /backlog-execute ${ticket.id}
 
+      ${screenshotGuidance}
+
       ${intercomStatusGuidance(state.mainSessionId)}
     `,
     {
       timeout: EXECUTE_TIMEOUT_MS,
-      extensions: [PI_INTERCOM_EXTENSION],
+      extensions: [PI_INTERCOM_EXTENSION, ...(subagentsExt ? [subagentsExt] : [])],
     },
   );
 
