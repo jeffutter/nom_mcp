@@ -264,8 +264,19 @@ fn data_dir() -> PathBuf {
 pub fn db_path() -> PathBuf {
     match std::env::var("NOM_MCP_DB_PATH") {
         Ok(p) if !p.is_empty() => PathBuf::from(p),
-        _ => data_dir().join("nom.db"),
+        _ => default_db_path(),
     }
+}
+
+/// The production database path, ignoring any `NOM_MCP_DB_PATH` override.
+///
+/// [`db_path()`] is env-aware so every surface can be pointed at a throwaway
+/// database; that makes it unsafe as the reference value for a "never touch
+/// production" safety check, since the override can make `db_path()` stop
+/// pointing at production at all. `seed_data`'s refusal-to-target-production
+/// gate must compare against *this* function instead.
+pub fn default_db_path() -> PathBuf {
+    data_dir().join("nom.db")
 }
 
 /// Resolve the MCP session-persistence file path (same directory as the main

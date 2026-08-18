@@ -256,8 +256,13 @@ impl Operation for SeedData {
             path = cwd.join(path);
         }
 
-        // Safety gate: never seed the default (production) database.
-        let default = crate::config::db_path();
+        // Safety gate: never seed the default (production) database. Must
+        // compare against the env-override-independent path — `db_path()`
+        // itself honors `NOM_MCP_DB_PATH`, so using it here would let an
+        // override active in this same shell (e.g. left set from a prior
+        // `serve http` session) mask the real production path and defeat
+        // this refusal.
+        let default = crate::config::default_db_path();
         if path == default {
             return Err(ErrorData::validation(
                 "path",
@@ -725,6 +730,43 @@ mod tests {
             err.reason
         );
         // Nothing was created or deleted
+        assert_eq!(default.exists(), existed_before);
+    }
+
+    /// Regression test: `NOM_MCP_DB_PATH` being set in the operator's shell
+    /// (the exact state the README's own documented dev workflow leaves
+    /// behind after a `serve http` session) must not defeat the
+    /// refuse-to-seed-production gate. Before this fix, the gate compared
+    /// against `config::db_path()`, which itself honors the override — so
+    /// an active override made the gate compare production against itself
+    /// under a different name and silently approve wiping it.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_seed_refuses_default_db_path_even_with_env_override_active() {
+        let default = crate::config::default_db_path();
+        let existed_before = default.exists();
+        let decoy_dir = TempDir::new().unwrap();
+        let decoy = decoy_dir.path().join("decoy.db");
+
+        let saved = std::env::var_os("NOM_MCP_DB_PATH");
+        unsafe { std::env::set_var("NOM_MCP_DB_PATH", &decoy) };
+
+        let op = SeedData::new(utc_clock());
+        let err = op
+            .execute_json(Arc::new(serde_json::json!({
+                "path": default.to_string_lossy(),
+            })))
+            .await
+            .unwrap_err();
+
+        match saved {
+            Some(v) => unsafe { std::env::set_var("NOM_MCP_DB_PATH", v) },
+            None => unsafe { std::env::remove_var("NOM_MCP_DB_PATH") },
+        }
+
+        assert_eq!(err.category, crate::error::ErrorCategory::Validation);
+        assert_eq!(err.field.as_deref(), Some("path"));
+        // Nothing was created or deleted at the real production path
         assert_eq!(default.exists(), existed_before);
     }
 
