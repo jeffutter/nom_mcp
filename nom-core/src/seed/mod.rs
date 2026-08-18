@@ -24,6 +24,8 @@ use serde::Deserialize;
 
 use crate::clock::Clock;
 use crate::error::ErrorData;
+use crate::food::NutrientValues;
+use crate::meal::compute_portion_macros;
 use crate::operation::{Operation, Surfaces};
 use crate::storage::Connection;
 use crate::storage::lock_probe::probe_db_lock;
@@ -108,32 +110,19 @@ const GOAL_TARGET_WEIGHT: f64 = 80.0;
 // Plan construction (pure — dates materialized from a given "today")
 // ---------------------------------------------------------------------------
 
-/// Portion macros for grams mode — identical formula to
-/// `meal::compute_portion_macros`: `snapshot_X_per_100g * quantity / 100.0`.
-fn portion_macros(per_100g: &(f64, f64, f64, f64, f64), grams: f64) -> (f64, f64, f64, f64, f64) {
-    let factor = grams / 100.0;
-    (
-        per_100g.0 * factor,
-        per_100g.1 * factor,
-        per_100g.2 * factor,
-        per_100g.3 * factor,
-        per_100g.4 * factor,
-    )
-}
-
 struct PlannedPortion {
     food_id: i64,
     quantity: f64,
-    /// Snapshot macros contributed by this portion (kcal, P, C, F, Fib).
-    snapshot: (f64, f64, f64, f64, f64),
+    /// Snapshot macros contributed by this portion.
+    snapshot: NutrientValues,
 }
 
 struct PlannedMeal {
     logged_at: String,
     logged_date: String,
-    /// Materialized meal totals (kcal, P, C, F, Fib) — the sums the readers
-    /// (`get_goal_progress`, `get_weekly_progress`) actually query.
-    totals: (f64, f64, f64, f64, f64),
+    /// Materialized meal totals — the sums the readers (`get_goal_progress`,
+    /// `get_weekly_progress`) actually query.
+    totals: NutrientValues,
     portions: Vec<PlannedPortion>,
 }
 
@@ -153,16 +142,29 @@ fn build_plan(today: NaiveDate) -> SeedPlan {
         let logged_date = Clock::format_date(date);
         let logged_at = format!("{logged_date}T{time}:00Z");
 
-        let mut totals = (0.0, 0.0, 0.0, 0.0, 0.0);
+        let mut totals = NutrientValues {
+            calories: 0.0,
+            protein_g: 0.0,
+            carbs_g: 0.0,
+            fat_g: 0.0,
+            fiber_g: 0.0,
+        };
         let mut planned_portions = Vec::new();
         for (food_idx, grams) in portions {
             let (_, kcal, p, c, f, fib) = SEED_FOODS[*food_idx];
-            let snapshot = portion_macros(&(kcal, p, c, f, fib), *grams);
-            totals.0 += snapshot.0;
-            totals.1 += snapshot.1;
-            totals.2 += snapshot.2;
-            totals.3 += snapshot.3;
-            totals.4 += snapshot.4;
+            let snapshot_100g = NutrientValues {
+                calories: kcal,
+                protein_g: p,
+                carbs_g: c,
+                fat_g: f,
+                fiber_g: fib,
+            };
+            let snapshot = compute_portion_macros(*grams, "grams", None, snapshot_100g);
+            totals.calories += snapshot.calories;
+            totals.protein_g += snapshot.protein_g;
+            totals.carbs_g += snapshot.carbs_g;
+            totals.fat_g += snapshot.fat_g;
+            totals.fiber_g += snapshot.fiber_g;
             planned_portions.push(PlannedPortion {
                 food_id: *food_idx as i64 + 1,
                 quantity: *grams,
@@ -366,11 +368,11 @@ impl Operation for SeedData {
                         meal_id,
                         meal.logged_at.as_str(),
                         meal.logged_date.as_str(),
-                        meal.totals.0,
-                        meal.totals.1,
-                        meal.totals.2,
-                        meal.totals.3,
-                        meal.totals.4,
+                        meal.totals.calories,
+                        meal.totals.protein_g,
+                        meal.totals.carbs_g,
+                        meal.totals.fat_g,
+                        meal.totals.fiber_g,
                     ),
                 )
                 .await
@@ -391,11 +393,11 @@ impl Operation for SeedData {
                             meal_id,
                             portion.food_id,
                             portion.quantity,
-                            portion.snapshot.0,
-                            portion.snapshot.1,
-                            portion.snapshot.2,
-                            portion.snapshot.3,
-                            portion.snapshot.4,
+                            portion.snapshot.calories,
+                            portion.snapshot.protein_g,
+                            portion.snapshot.carbs_g,
+                            portion.snapshot.fat_g,
+                            portion.snapshot.fiber_g,
                         ),
                     )
                     .await
@@ -535,17 +537,6 @@ mod tests {
         match row.get_value(0).unwrap() {
             turso::Value::Integer(n) => n,
             other => panic!("expected integer count, got {other:?}"),
-        }
-    }
-
-    /// Tuple-index helper (Rust disallows non-const index into tuples).
-    fn total_at(meal: &PlannedMeal, idx: usize) -> f64 {
-        match idx {
-            0 => meal.totals.0,
-            1 => meal.totals.1,
-            2 => meal.totals.2,
-            3 => meal.totals.3,
-            _ => meal.totals.4,
         }
     }
 
@@ -810,21 +801,25 @@ mod tests {
             .filter(|m| m.logged_date == "2026-08-17")
             .collect();
         assert_eq!(todays.len(), 4);
-        let sum = |i: usize| todays.iter().map(|m| total_at(m, i)).sum::<f64>();
-        assert!((sum(0) - 1846.0).abs() < 1e-9);
-        assert!((sum(1) - 172.9).abs() < 1e-9);
-        assert!((sum(2) - 113.8).abs() < 1e-9);
-        assert!((sum(3) - 77.4).abs() < 1e-9);
-        assert!((sum(4) - 37.0).abs() < 1e-9);
+        let calories: f64 = todays.iter().map(|m| m.totals.calories).sum();
+        let protein: f64 = todays.iter().map(|m| m.totals.protein_g).sum();
+        let carbs: f64 = todays.iter().map(|m| m.totals.carbs_g).sum();
+        let fat: f64 = todays.iter().map(|m| m.totals.fat_g).sum();
+        let fiber: f64 = todays.iter().map(|m| m.totals.fiber_g).sum();
+        assert!((calories - 1846.0).abs() < 1e-9);
+        assert!((protein - 172.9).abs() < 1e-9);
+        assert!((carbs - 113.8).abs() < 1e-9);
+        assert!((fat - 77.4).abs() < 1e-9);
+        assert!((fiber - 37.0).abs() < 1e-9);
 
         // Breakfast (oatmeal 100g + milk 100g) spot check
         let breakfast = &plan.meals[14];
         assert_eq!(breakfast.logged_at, "2026-08-17T07:30:00Z");
-        assert!((breakfast.totals.0 - 502.0).abs() < 1e-9);
-        assert!((breakfast.totals.1 - 20.7).abs() < 1e-9);
-        assert!((breakfast.totals.2 - 70.8).abs() < 1e-9);
-        assert!((breakfast.totals.3 - 11.8).abs() < 1e-9);
-        assert!((breakfast.totals.4 - 10.0).abs() < 1e-9);
+        assert!((breakfast.totals.calories - 502.0).abs() < 1e-9);
+        assert!((breakfast.totals.protein_g - 20.7).abs() < 1e-9);
+        assert!((breakfast.totals.carbs_g - 70.8).abs() < 1e-9);
+        assert!((breakfast.totals.fat_g - 11.8).abs() < 1e-9);
+        assert!((breakfast.totals.fiber_g - 10.0).abs() < 1e-9);
 
         // Every day has at least one meal (weekly calorie data spans 7 days)
         let dates: HashSet<&str> = plan.meals.iter().map(|m| m.logged_date.as_str()).collect();
@@ -837,11 +832,11 @@ mod tests {
         // all three statuses (same arithmetic as goal::nutrient_progress).
         let today = NaiveDate::from_ymd_opt(2026, 8, 17).unwrap();
         let plan = build_plan(today);
-        let sum = |i: usize| {
+        let today_sum = |get: fn(&PlannedMeal) -> f64| {
             plan.meals
                 .iter()
                 .filter(|m| m.logged_date == "2026-08-17")
-                .map(|m| total_at(m, i))
+                .map(get)
                 .sum::<f64>()
         };
         let status = |consumed: f64, target: f64| {
@@ -855,11 +850,11 @@ mod tests {
             }
         };
         let statuses = vec![
-            status(sum(0), GOAL_CALORIES),
-            status(sum(1), GOAL_PROTEIN_G),
-            status(sum(2), GOAL_CARBS_G),
-            status(sum(3), GOAL_FAT_G),
-            status(sum(4), GOAL_FIBER_G),
+            status(today_sum(|m| m.totals.calories), GOAL_CALORIES),
+            status(today_sum(|m| m.totals.protein_g), GOAL_PROTEIN_G),
+            status(today_sum(|m| m.totals.carbs_g), GOAL_CARBS_G),
+            status(today_sum(|m| m.totals.fat_g), GOAL_FAT_G),
+            status(today_sum(|m| m.totals.fiber_g), GOAL_FIBER_G),
         ];
         let set: HashSet<&str> = statuses.iter().copied().collect();
         assert!(

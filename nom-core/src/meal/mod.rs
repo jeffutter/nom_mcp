@@ -126,7 +126,7 @@ pub struct PortionSummary {
 ///
 /// For grams mode: `snapshot_X_per_100g * quantity / 100.0`
 /// For servings mode: `snapshot_X_per_100g * (serving_size_g * quantity) / 100.0`
-fn compute_portion_macros(
+pub(crate) fn compute_portion_macros(
     quantity: f64,
     quantity_mode: &str,
     snapshot_serving_size_g: Option<f64>,
