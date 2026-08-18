@@ -121,12 +121,17 @@ Besides its tools, the MCP surface exposes one resource, `nom://weekly-summary`,
 
 ## Usage: `nom-mcp-remote`
 
-A thin HTTP client exposing the same operations as the local CLI (`nom-mcp-remote <operation> key=value ...`) that posts to a running `serve http` server's `/api/{operation}` endpoint instead of touching the database directly, and renders results/errors identically to the local CLI. Unlike the local CLI's `--key value` flags, it takes bare `key=value` pairs, and its auto-typing is narrower: only bare numbers and `true`/`false` become JSON numbers/booleans — everything else is sent as a string. As a result, nested-JSON arguments (e.g. `log_meal`'s `portions`) cannot be passed via the remote CLI yet (tracked in TASK-60). It requires `[remote].server_url` to be configured (see below) and a `nom-mcp serve http` process to be running and reachable.
+A thin HTTP client exposing the same operations as the local CLI (`nom-mcp-remote <operation> key=value ...`) that posts to a running `serve http` server's `/api/{operation}` endpoint instead of touching the database directly, and renders results/errors identically to the local CLI. Unlike the local CLI's `--key value` flags, it takes bare `key=value` pairs. Values that are valid JSON (numbers, booleans, `null`, arrays, objects) are sent as that JSON; anything else is sent as a string — the same rules as the local CLI, so nested-JSON arguments work too:
 
 ```sh
 nom-mcp-remote search_food query=almonds
 nom-mcp-remote log_weight value=181.4
+nom-mcp-remote log_meal portions='[{"food_id":1,"quantity":250,"quantity_mode":"grams"}]'
 ```
+
+(single-quote the JSON so your shell passes the brackets and quotes through verbatim.)
+
+It requires `[remote].server_url` to be configured (see below) and a `nom-mcp serve http` process to be running and reachable.
 
 ## Configuration
 

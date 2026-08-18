@@ -122,7 +122,7 @@ pub fn parse_and_dispatch(
             for id in sub_matches.ids() {
                 let key = id.as_str();
                 if let Some(val) = sub_matches.get_one::<String>(key) {
-                    map.insert(key.to_string(), parse_value(val));
+                    map.insert(key.to_string(), crate::cli::parse_value(val));
                 }
             }
             serde_json::Value::Object(map)
@@ -131,15 +131,6 @@ pub fn parse_and_dispatch(
     };
 
     Ok((op.clone(), Arc::new(args_json)))
-}
-
-/// Parse a CLI argument value into a JSON-compatible type.
-fn parse_value(s: &str) -> serde_json::Value {
-    // Try parsing as JSON first (handles numbers, booleans, null)
-    if let Ok(val) = serde_json::from_str(s) {
-        return val;
-    }
-    serde_json::Value::String(s.to_string())
 }
 
 #[cfg(test)]

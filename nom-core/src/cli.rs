@@ -1,16 +1,16 @@
 //! CLI argument parsing shared between local-CLI and remote-CLI.
 //!
 //! Parses `key=value` argument pairs into typed JSON objects.
-//! Supports auto-typing: bare numbers become JSON numbers, "true"/"false" become booleans,
-//! everything else is a string.
+//! Values that are valid JSON (numbers, booleans, null, arrays, objects) are sent as
+//! that JSON; anything else stays a plain string.
 
 use std::collections::HashMap;
 
 use super::error::ErrorData;
 
 /// Parse key=value argument pairs into a JSON object.
-/// Supports auto-typing: bare numbers become JSON numbers, "true"/"false" become booleans,
-/// everything else is a string.
+/// Values that are valid JSON (numbers, booleans, null, arrays, objects) are sent as
+/// that JSON; anything else stays a plain string.
 pub fn parse_params(args: &[String]) -> Result<serde_json::Value, ErrorData> {
     let mut map = HashMap::new();
     for arg in args {
@@ -25,19 +25,16 @@ pub fn parse_params(args: &[String]) -> Result<serde_json::Value, ErrorData> {
         .map_err(|e| ErrorData::storage_failure(format!("failed to serialize params: {e}")))
 }
 
-/// Auto-type a string value: numbers → JSON number, true/false → boolean, else string.
+/// Auto-type a string value: values that are valid JSON (numbers, booleans,
+/// null, arrays, objects) become that JSON value; anything else stays a plain
+/// string. Shared by the local-CLI router and the remote-CLI so both surfaces
+/// type identical inputs alike.
 pub fn parse_value(s: &str) -> serde_json::Value {
-    if s == "true" {
-        serde_json::Value::Bool(true)
-    } else if s == "false" {
-        serde_json::Value::Bool(false)
-    } else if let Ok(n) = s.parse::<i64>() {
-        serde_json::json!(n)
-    } else if let Ok(f) = s.parse::<f64>() {
-        serde_json::json!(f)
-    } else {
-        serde_json::json!(s)
+    // Try parsing as JSON first (handles numbers, booleans, null, arrays, objects)
+    if let Ok(val) = serde_json::from_str(s) {
+        return val;
     }
+    serde_json::Value::String(s.to_string())
 }
 
 #[cfg(test)]
@@ -69,6 +66,54 @@ mod tests {
     fn test_parse_value_strings() {
         assert_eq!(parse_value("hello"), serde_json::json!("hello"));
         assert_eq!(parse_value("123abc"), serde_json::json!("123abc"));
+    }
+
+    #[test]
+    fn test_parse_value_arrays() {
+        assert_eq!(parse_value("[\"a\",\"b\"]"), serde_json::json!(["a", "b"]));
+    }
+
+    #[test]
+    fn test_parse_value_objects() {
+        assert_eq!(
+            parse_value("{\"k\":\"v\"}"),
+            serde_json::json!({ "k": "v" })
+        );
+    }
+
+    #[test]
+    fn test_parse_value_null() {
+        assert_eq!(parse_value("null"), serde_json::Value::Null);
+    }
+
+    /// Pins the exact log_meal portions shape from the ticket: nested array of
+    /// objects must round-trip with correct field types (i64 / f64 / string).
+    #[test]
+    fn test_parse_value_log_meal_portions_shape() {
+        let v = parse_value("[{\"food_id\":1,\"quantity\":250,\"quantity_mode\":\"grams\"}]");
+        let arr = v.as_array().expect("portions must parse as an array");
+        assert_eq!(arr.len(), 1);
+        let portion = &arr[0];
+        assert_eq!(portion["food_id"], 1);
+        assert_eq!(portion["quantity"], 250);
+        assert_eq!(portion["quantity_mode"], "grams");
+    }
+
+    /// Double-quoted input loses its quotes (same as the local CLI today).
+    #[test]
+    fn test_parse_value_quoted_string_strips_quotes() {
+        assert_eq!(parse_value("\"quoted\""), serde_json::json!("quoted"));
+    }
+
+    /// The exact remote-CLI failure mode from the ticket description: a raw
+    /// bracketed JSON arg must reach the params map as a real array, not a string.
+    #[test]
+    fn test_parse_params_nested_json_round_trip() {
+        let result = parse_params(&["portions=[{\"food_id\":1}]".into()]).unwrap();
+        let portions = result["portions"]
+            .as_array()
+            .expect("portions must be a JSON array, not a string");
+        assert_eq!(portions[0]["food_id"], 1);
     }
 
     // -- parse_params tests --
