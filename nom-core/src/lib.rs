@@ -28,6 +28,7 @@ pub mod goal;
 pub mod logging;
 pub mod meal;
 pub mod operation;
+pub mod seed;
 pub mod storage;
 pub mod weekly;
 pub mod weight;

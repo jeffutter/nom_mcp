@@ -133,7 +133,7 @@ nom-mcp-remote log_weight value=181.4
 Layered precedence: hardcoded defaults < TOML file < environment variables (env always wins).
 
 - **Config file**: `$XDG_CONFIG_HOME/nom_mcp/config.toml` (falls back to `~/.config/nom_mcp/config.toml`).
-- **Database file**: `$XDG_DATA_HOME/nom_mcp/nom.db` (falls back to `~/.local/share/nom_mcp/nom.db`), created automatically.
+- **Database file**: `$XDG_DATA_HOME/nom_mcp/nom.db` (falls back to `~/.local/share/nom_mcp/nom.db`), created automatically. Override with the `NOM_MCP_DB_PATH` env var (e.g. to point a dev server at a throwaway DB seeded by [`seed_data`](#local-dev-instance-with-one-command-seed-data)); the MCP session store (`mcp_sessions.db`) then lives alongside the overridden DB, isolating a dev instance's session state.
 - **Env vars**: prefixed `NOM_MCP_`, e.g. `NOM_MCP_TIMEZONE`, `NOM_MCP_USDA_API_KEY`. Nested keys (like the remote-CLI's server URL) use a double underscore: `NOM_MCP_remote__server_url`.
 
 ```toml
@@ -167,6 +167,30 @@ The `get_goal_progress` and `get_weekly_progress` tools can attach an MCP Apps `
 ## Storage locking
 
 `nom-core` uses a non-blocking advisory-lock probe before opening the SQLite database, so running the local CLI and `nom-mcp serve` against the same database file at the same time fails fast with a clear "server is running — stop it or use the remote-CLI instead" error rather than risking silent WAL corruption from two writers. If you're running `nom-mcp serve`, use `nom-mcp-remote` for ad hoc commands instead of the local CLI. See [AGENTS.md](AGENTS.md#storage-turso--advisory-lock-handoff).
+
+## Local dev instance with one-command seed data
+
+Widget work (or any e2e validation of the UI) needs a local instance with realistic multi-day data. `seed_data` (local CLI only) creates or resets a throwaway database populated with a deterministic fixture: active goals covering all five nutrients plus a target weight (each with a direction), seven custom foods, eighteen meals across seven days including today (varied timing so Fasting Windows exist), seven weight entries, and widget display enabled. Values are chosen so `get_goal_progress` spans `under`, `met`, and `over` statuses, so every widget renders non-trivial content. Dates are relative to today, so coverage holds whenever it runs.
+
+```sh
+# 1. Seed a throwaway DB (never touches your real data; re-running resets it)
+nom-mcp seed_data --path /tmp/nom-dev/nom.db
+
+# 2. Start the server against it (NOM_MCP_DB_PATH points every surface at the seeded DB)
+NOM_MCP_DB_PATH=/tmp/nom-dev/nom.db nom-mcp serve http --port 8000
+
+# 3. Point a streamable-HTTP MCP client at http://localhost:8000/mcp
+#    (REST: POST /api/{operation}; remote CLI:
+#     NOM_MCP_remote__server_url=http://localhost:8000 nom-mcp-remote get_goal_progress)
+
+rm -rf /tmp/nom-dev   # cleanup — the seeded DB is disposable
+```
+
+Notes:
+
+- `seed_data` refuses to target the default database path (`$XDG_DATA_HOME/nom_mcp/nom.db`) with a validation error if you try.
+- While the server holds the seeded DB open, the local CLI against that same path fails fast with the usual [storage-locking](#storage-locking) error — use `nom-mcp-remote` instead.
+- Re-running `seed_data` against the same path deletes the DB (and its WAL sidecars) and re-inserts the identical rows, resetting to the same clean known state. A re-run that crosses midnight shifts dates by one day, by design.
 
 ## Development
 

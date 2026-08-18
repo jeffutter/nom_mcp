@@ -1786,6 +1786,7 @@ dependencies = [
  "rmcp",
  "serde_json",
  "serial_test",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",

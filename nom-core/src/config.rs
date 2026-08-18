@@ -255,9 +255,17 @@ fn data_dir() -> PathBuf {
     dir
 }
 
-/// Resolve the database file path following XDG Base Directory spec.
+/// Resolve the database file path.
+///
+/// Honors `NOM_MCP_DB_PATH` when set to a non-empty value — used to point
+/// every surface (local CLI and both `serve` transports) at a throwaway
+/// database, e.g. one seeded by `seed_data` for widget development.
+/// Otherwise falls back to the XDG default (`$XDG_DATA_HOME/nom_mcp/nom.db`).
 pub fn db_path() -> PathBuf {
-    data_dir().join("nom.db")
+    match std::env::var("NOM_MCP_DB_PATH") {
+        Ok(p) if !p.is_empty() => PathBuf::from(p),
+        _ => data_dir().join("nom.db"),
+    }
 }
 
 /// Resolve the MCP session-persistence file path (same directory as the main
@@ -269,8 +277,15 @@ pub fn db_path() -> PathBuf {
 /// open for the process lifetime, and a live turso connection holds the
 /// advisory write lock on its file — sharing `nom.db` would make every
 /// operation's `Connection::open()` lock probe report `local_db_locked`.
+///
+/// Derived from [`db_path()`] rather than the XDG data dir directly, so a
+/// `NOM_MCP_DB_PATH` override isolates session state in the same throwaway
+/// directory as the dev database.
 pub fn session_db_path() -> PathBuf {
-    data_dir().join("mcp_sessions.db")
+    let db = db_path();
+    db.parent()
+        .map(|parent| parent.join("mcp_sessions.db"))
+        .unwrap_or_else(|| db.with_file_name("mcp_sessions.db"))
 }
 
 /// Load (or create on first use) the persistent per-installation
@@ -534,7 +549,33 @@ off_password = "toml-pass"
         let _ = std::fs::remove_dir_all(&data_home);
     }
 
-    // -- db_path tests --
+    // -- db_path / session_db_path tests --
+
+    #[serial_test::serial]
+    #[test]
+    fn test_db_path_env_override() {
+        let mut guard = TestGuard::new();
+        let dir = std::env::temp_dir().join("nom_mcp_db_path_test");
+        let db = dir.join("custom-nom.db");
+        guard.set_temp_dir(dir.clone());
+        guard.set("NOM_MCP_DB_PATH", &db.to_string_lossy());
+
+        assert_eq!(db_path(), db);
+        // Session store lives alongside the overridden DB, fully isolated
+        // from the default XDG location.
+        assert_eq!(session_db_path(), dir.join("mcp_sessions.db"));
+    }
+
+    #[serial_test::serial]
+    #[test]
+    fn test_db_path_env_unset_uses_xdg_default() {
+        unsafe { std::env::remove_var("NOM_MCP_DB_PATH") };
+        let path = db_path();
+        assert_eq!(path.file_name().unwrap(), "nom.db");
+        let session = session_db_path();
+        assert_eq!(session.file_name().unwrap(), "mcp_sessions.db");
+        assert_eq!(session.parent().unwrap(), path.parent().unwrap());
+    }
 
     #[test]
     fn test_db_path_creates_parent_directory() {

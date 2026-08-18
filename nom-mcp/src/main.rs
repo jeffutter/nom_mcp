@@ -17,6 +17,7 @@ use nom_core::food::{CreateCustomFood, SearchFood};
 use nom_core::goal::{GetGoalProgress, SetNutritionGoals};
 use nom_core::meal::{DeleteMeal, GetMealsByDateRange, LogMeal, SearchMeals, UpdateMeal};
 use nom_core::operation::{OperationRegistry, cli_router};
+use nom_core::seed::SeedData;
 use nom_core::weekly::GetWeeklyProgress;
 use nom_core::weight::{
     DeleteWeightEntry, GetWeightByDate, GetWeightByDateRange, GetWeightToday, LogWeight,
@@ -118,6 +119,9 @@ fn build_registry(
 
     // Register weekly progress operation (MCP-only)
     registry.register(Arc::new(GetWeeklyProgress::new(*clock)));
+
+    // Register seed data operation (CLI-only dev tooling)
+    registry.register(Arc::new(SeedData::new(*clock)));
 
     registry
 }
