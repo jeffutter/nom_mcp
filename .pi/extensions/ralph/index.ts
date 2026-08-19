@@ -73,23 +73,20 @@ const PI_INTERCOM_EXTENSION = join(
   ".pi/agent/npm/node_modules/pi-intercom/index.ts",
 );
 
-/**
- * @gotgenes/pi-subagents entry point, resolved across pi's versioned package trees
- * (newest first). Lets executors delegate multi-image work — widget screenshot
- * verification — to nested subagents, each with a fresh context, instead of reading
- * >4 screenshots into their own context and tripping the vLLM
+/** Path assumption: wherever this user's `@gotgenes/pi-subagents` package currently
+ * resolves — the live `npm/` tree (npm2/npm3 are stale pre-migration backups; verified
+ * 2026-08-18 via package versions and lockfile mtimes). May need updating if `pi update`
+ * changes the install layout. Gives executors the subagent tool so widget screenshot
+ * verification can be delegated to nested subagents (fresh context each) instead of
+ * reading >4 screenshots into the executor's own context and tripping the vLLM
  * --limit-mm-per-prompt image=4 hard cap (HTTP 400). Verified end-to-end 2026-08-18:
  * a --no-extensions parent with this -e flag spawns in-process children that load
  * the parent's extensions (minus the recursion-guarded dispatch tools) and can read
- * images fine.
- */
-function resolvePiSubagentsExtension(): string | null {
-  for (const tree of ["npm3", "npm2", "npm"]) {
-    const p = join(homedir(), ".pi/agent", tree, "node_modules/@gotgenes/pi-subagents/src/index.ts");
-    if (existsSync(p)) return p;
-  }
-  return null;
-}
+ * images fine. */
+const PI_SUBAGENTS_EXTENSION = join(
+  homedir(),
+  ".pi/agent/npm/node_modules/@gotgenes/pi-subagents/src/index.ts",
+);
 
 const DEFAULT_ITERATIONS = 16;
 const DEFAULT_REVIEW_EVERY = 3;
@@ -665,11 +662,11 @@ async function doExecute(
   const shaBefore = await currentHeadSha(pi, cwd);
   // Screenshot-cap guard: without the subagent tool, visual verification reads every
   // rendered screenshot into the executor's own context and dies at 5 images (vLLM
-  // 4-image cap) — confirmed killer of TASK-55/57 runs. When the package can't be
-  // resolved, degrade gracefully with an explicit fallback instruction rather than
-  // silently losing the capability.
-  const subagentsExt = resolvePiSubagentsExtension();
-  const screenshotGuidance = subagentsExt
+  // 4-image cap) — confirmed killer of TASK-55/57 runs. When the extension can't be
+  // found (package moved/removed), degrade gracefully with an explicit fallback
+  // instruction rather than silently losing the capability.
+  const hasSubagents = existsSync(PI_SUBAGENTS_EXTENSION);
+  const screenshotGuidance = hasSubagents
     ? dedent`
         Widget visual verification: never read more than 4 screenshots into your own session (the model provider rejects prompts with >4 images). Delegate screenshot review to subagent calls — one subagent per batch of <=4 images, each reporting findings back as text.
       `
@@ -688,7 +685,7 @@ async function doExecute(
     `,
     {
       timeout: EXECUTE_TIMEOUT_MS,
-      extensions: [PI_INTERCOM_EXTENSION, ...(subagentsExt ? [subagentsExt] : [])],
+      extensions: [PI_INTERCOM_EXTENSION, ...(hasSubagents ? [PI_SUBAGENTS_EXTENSION] : [])],
     },
   );
 
