@@ -34,6 +34,13 @@
  * promptly," not a stuck loop, which was judged an acceptable price for live
  * progress visibility. Skills are unaffected — that's a separate `--no-skills`
  * flag we don't touch.
+ *
+ * The orchestrating session gets the mirror-image framing: while a loop is
+ * running, a `before_agent_start` handler appends `ORCHESTRATOR_ROLE_GUIDANCE`
+ * to this session's system prompt on every turn, so worker progress pings
+ * (which arrive as ordinary injected user messages) are read as status
+ * reports to relay — not task assignments to execute in parallel with the
+ * worker that owns the ticket.
  */
 
 import { existsSync } from "node:fs";
@@ -511,6 +518,31 @@ function intercomStatusGuidance(mainSessionId: string): string {
     the task itself.
   `;
 }
+
+/**
+ * Standing role instructions appended to the orchestrating session's system prompt on every
+ * turn while a loop is running (see the `before_agent_start` handler in the default export).
+ * Guards against a confirmed live failure mode (2026-08-19): a worker's intercom progress ping
+ * ("Starting TASK-58 research") reads like a task assignment, and without explicit role
+ * framing the orchestrator spontaneously started parallel research on the same ticket —
+ * duplicating the worker's effort and risking conflicting backlog/code edits. Re-appended on
+ * every agent start, so the framing survives context compaction.
+ */
+const ORCHESTRATOR_ROLE_GUIDANCE = dedent`
+  Ralph orchestrator role: an autonomous ralph backlog loop is currently running in this
+  session. All real ticket work (research, planning, implementation, review) runs in separate
+  headless worker sessions; their intercom messages (from sessions named \`subagent-chat-*\`)
+  are progress reports about work those workers own end-to-end — NOT tasks assigned to you.
+  - Do not perform the workers' work yourself: when a progress report names a ticket, do not
+    start researching it, planning it, editing its code, or mutating its backlog record in this
+    session. Parallel work duplicates effort and risks conflicting edits; each worker owns its
+    ticket until its step finishes.
+  - Your job is to orchestrate and report: track the loop with the ralph_status tool, relay
+    worker progress to the user, and surface failures or stalls (loop history in
+    .pi/ralph/history.jsonl; worker transcripts under ~/.pi/agent/sessions/).
+  - Explicit user instructions always override this framing: if the user directly asks you to
+    do something, follow them even if it touches a ralph-managed ticket.
+`;
 
 async function runHeadless(
   pi: ExtensionAPI,
@@ -1663,6 +1695,18 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.setWidget("ralph", undefined);
       ctx.ui.notify("Cleared the ralph status widget.", "info");
     },
+  });
+
+  // While the loop is live, frame every turn of THIS session as orchestration-only. Worker
+  // progress pings arrive as ordinary injected user messages; without this standing
+  // instruction the model treats them as task assignments and starts doing the workers'
+  // work in parallel (confirmed live 2026-08-19 — see ORCHESTRATOR_ROLE_GUIDANCE).
+  pi.on("before_agent_start", async (event) => {
+    const state = activeState;
+    if (!state || (state.status !== "running" && state.status !== "stopping")) {
+      return undefined;
+    }
+    return { systemPrompt: event.systemPrompt + "\n\n" + ORCHESTRATOR_ROLE_GUIDANCE };
   });
 
   pi.on("session_shutdown", async () => {
