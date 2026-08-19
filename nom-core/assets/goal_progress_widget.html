@@ -31,18 +31,23 @@
   }
 
   body {
-    padding: 12px;
+    padding: clamp(12px, 3vw, 20px);
   }
 
   /* Shared slim date header line (both variants). */
   .header {
-    font-size: 11px;
+    font-size: clamp(11px, 1.6vw, 14px);
     color: var(--fg-muted);
-    margin: 0 0 6px 0;
+    margin: 0 0 clamp(6px, 1.2vw, 12px) 0;
     line-height: 1;
   }
 
-  /* --- Compact variant: single row of rings --- */
+  /* --- Compact variant: single row of rings ---
+     Ring/text sizes scale with the widget's own render width (vw is scoped
+     to this iframe's document, not the host page) via clamp(min, preferred,
+     max): small and tight on a narrow embed, larger on a wide one, instead
+     of a single pixel size that is either cramped or overflowing depending
+     on the host. */
 
   .ring-row {
     display: flex;
@@ -60,8 +65,8 @@
 
   .ring-wrap {
     position: relative;
-    width: 44px;
-    height: 44px;
+    width: clamp(44px, 11vw, 72px);
+    height: clamp(44px, 11vw, 72px);
   }
 
   .ring-wrap svg,
@@ -75,15 +80,15 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 9px;
+    font-size: clamp(9px, 2.1vw, 14px);
     font-weight: 600;
     white-space: nowrap;
   }
 
   .ring-label {
-    font-size: 9px;
+    font-size: clamp(9px, 1.7vw, 12px);
     color: var(--fg-muted);
-    margin-top: 2px;
+    margin-top: clamp(2px, 0.6vw, 6px);
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -111,10 +116,10 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 4px 8px;
-    font-size: 10px;
+    font-size: clamp(10px, 1.5vw, 13px);
     color: var(--fg-muted);
-    margin-top: 7px;
-    padding-top: 5px;
+    margin-top: clamp(7px, 1.5vw, 14px);
+    padding-top: clamp(5px, 1.2vw, 10px);
     border-top: 1px solid var(--border);
     line-height: 1;
   }
@@ -125,10 +130,10 @@
   }
 
   .chip {
-    font-size: 9px;
+    font-size: clamp(9px, 1.3vw, 11px);
     font-weight: 600;
     text-transform: uppercase;
-    padding: 1px 4px;
+    padding: 2px 5px;
     border-radius: 3px;
     background: var(--track);
   }
@@ -174,6 +179,8 @@
 
   .card-ring {
     flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
   }
 
   .placeholder {
@@ -269,15 +276,19 @@
     });
   }
 
-  // Donut ring as inline SVG. The fill circle uses pathLength="100" so
-  // stroke-dasharray maps directly to a percentage — no circumference math.
-  // fillPct null/undefined or <= 0 draws only the neutral track; values over
-  // 100 cap the arc at a full ring (the true number still shows in text).
+  // Donut ring as inline SVG. `size` is only the drawing resolution (viewBox
+  // + stroke proportions); the rendered size is set by CSS on the enclosing
+  // .ring-wrap/.card-ring (width/height: 100% here lets it scale with that
+  // container instead of being pinned to a device-specific pixel size). The
+  // fill circle uses pathLength="100" so stroke-dasharray maps directly to a
+  // percentage — no circumference math. fillPct null/undefined or <= 0 draws
+  // only the neutral track; values over 100 cap the arc at a full ring (the
+  // true number still shows in text).
   function ringSvg(size, fillPct, cls) {
     var c = size / 2;
     var sw = Math.max(3, Math.round(size * 0.15));
     var r = c - sw / 2 - 0.5;
-    var html = '<svg width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '" aria-hidden="true">';
+    var html = '<svg width="100%" height="100%" viewBox="0 0 ' + size + ' ' + size + '" aria-hidden="true">';
     html += '<circle class="ring-track" cx="' + c + '" cy="' + c + '" r="' + r + '" stroke-width="' + sw + '"/>';
     if (fillPct !== undefined && fillPct !== null && fillPct > 0) {
       var dash = Math.max(0, Math.min(100, fillPct));
@@ -345,7 +356,7 @@
       html +=
         '<div class="ring-seg">' +
           '<div class="ring-wrap">' +
-            ringSvg(44, fill, "status-" + status) +
+            ringSvg(72, fill, "status-" + status) +
             '<span class="ring-center">' + escapeHtml(centerText(p, n.unit)) + "</span>" +
           "</div>" +
           '<span class="ring-label">' + escapeHtml(n.label) + "</span>" +
