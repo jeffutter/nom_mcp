@@ -26,6 +26,7 @@ ordinal: 64000
 When the user logs food, the LLM replies with text; the user wants a compact widget attached to that moment showing (a) the macros of the just-logged food/meal and (b) their updated daily totals after the addition.
 
 Current gap: log_meal returns {meal_id, logged_at, logged_date, totals:{total_calories,total_protein_g,total_carbs_g,total_fat_g,total_fiber_g}} — no per-food breakdown and no daily context. This task extends the response additively (existing fields unchanged) with:
+
 - Per-portion breakdown: food name + calories/protein/carbs/fat/fiber for each portion logged (respecting quantity mode and any adjustment)
 - Post-insertion daily totals with per-nutrient progress (consumed/target/percent/status) — i.e., the same shape get_goal_progress returns for the logged_date
 
@@ -55,7 +56,7 @@ Orchestration plan — two sequential sub-tickets, both unplanned (each needs it
 
 TASK-58.1 (Rust core, ships first): extend log_meal's response additively with `portions` + `daily_totals`. Pure domain work in nom-core; all four surfaces (CLI/HTTP/MCP/remote) pick up the fields automatically through the registry. Shippable independently — useful to text-only LLM clients before any UI exists.
 
-TASK-58.2 (UI + MCP surface, ships second): new self-contained widget asset `nom-core/assets/food_added_widget.html` plus mcp_handler wiring (ui:// resource, _meta.ui gating on log_meal, dispatch_read_resource arm). Consumes the response contract from .1. Depends on .1.
+TASK-58.2 (UI + MCP surface, ships second): new self-contained widget asset `nom-core/assets/food_added_widget.html` plus mcp_handler wiring (ui:// resource,_meta.ui gating on log_meal, dispatch_read_resource arm). Consumes the response contract from .1. Depends on .1.
 
 ## Response contract (integration point between .1 and .2 — binding)
 
@@ -94,5 +95,5 @@ TASK-58.2 (UI + MCP surface, ships second): new self-contained widget asset `nom
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
-Shipped in two sequential sub-tickets: TASK-58.1 extended log_meal's response additively with `portions` (per-portion food name + macros) and `daily_totals` (post-insertion daily totals in the get_goal_progress per-nutrient progress shape), and TASK-58.2 added the self-contained food_added_widget.html asset plus the MCP wiring serving it at ui://nom-mcp/food-added with _meta.ui gating identical to the existing widget tools. All 6 ACs verified: CI gate green (fmt, clippy -D warnings, nextest, doctests), functional e2e on the seeded local instance, visual review SHIP (320x139 at 320px width, all status colors and light/dark theming correct). Note: the execute step ran out of its 40-minute budget twice (implementation left uncommitted; finalization interrupted mid-ticket-bookkeeping) — work was resumed from the leftover tree and finalized manually.
+Shipped in two sequential sub-tickets: TASK-58.1 extended log_meal's response additively with `portions` (per-portion food name + macros) and `daily_totals` (post-insertion daily totals in the get_goal_progress per-nutrient progress shape), and TASK-58.2 added the self-contained food_added_widget.html asset plus the MCP wiring serving it at ui://nom-mcp/food-added with_meta.ui gating identical to the existing widget tools. All 6 ACs verified: CI gate green (fmt, clippy -D warnings, nextest, doctests), functional e2e on the seeded local instance, visual review SHIP (320x139 at 320px width, all status colors and light/dark theming correct). Note: the execute step ran out of its 40-minute budget twice (implementation left uncommitted; finalization interrupted mid-ticket-bookkeeping) — work was resumed from the leftover tree and finalized manually.
 <!-- SECTION:FINAL_SUMMARY:END -->

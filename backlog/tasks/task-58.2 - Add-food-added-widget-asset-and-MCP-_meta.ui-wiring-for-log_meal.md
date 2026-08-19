@@ -23,6 +23,7 @@ New self-contained MCP Apps widget asset plus the MCP-surface wiring that gates 
 Asset: nom-core/assets/food_added_widget.html, mirroring goal_progress_widget.html exactly — inline JSON-RPC-over-postMessage scaffold, ui/initialize handshake -> initialized, data from ui/notifications/tool-result via toolResult.content[0].text JSON.parse, host-context-changed theming (colorScheme + CSS variable overrides), ResizeObserver -> ui/notifications/size-changed, light-dark() CSS custom properties with the existing palette (--under blue / --met green / --over red), SVG donut rings using pathLength='100' so stroke-dasharray maps directly to percent. appInfo name 'nom-mcp-food-added-widget'. Fully self-contained (restrictive CSP: no external fetches). All interpolated strings escaped (escapeHtml pattern).
 
 MCP wiring in nom-core/src/operation/mcp_handler.rs, following the three existing widgets:
+
 - const FOOD_ADDED_UI_RESOURCE_URI = "ui://nom-mcp/food-added" + FOOD_ADDED_WIDGET_HTML via include_str!
 - fn food_added_ui_meta(domain) through the shared ui_meta() helper
 - build_tools_gated(): add a 'log_meal' match arm setting .meta = Some(food_added_ui_meta(domain)) — identical gating (widget_display_enabled flag + ui_blocked_clients suppression)
@@ -36,7 +37,7 @@ Visual spec (approved design language): compact panel, target <= ~150px tall at 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [x] #1 resources/list includes ui://nom-mcp/food-added; resources/read serves the widget HTML (mime text/html;profile=mcp-app, 24h TTL, contents meta carries ui.resourceUri).
-- [x] #2 log_meal's tool declaration carries _meta.ui pointing at the resource when widget display is enabled; suppressed when disabled or the requesting client is blocklisted — identical gating to the existing three widget tools (shared test fixture extended to register LogMeal; enabled/disabled/blocked-client cases covered).
+- [x] #2 log_meal's tool declaration carries_meta.ui pointing at the resource when widget display is enabled; suppressed when disabled or the requesting client is blocklisted — identical gating to the existing three widget tools (shared test fixture extended to register LogMeal; enabled/disabled/blocked-client cases covered).
 - [x] #3 Widget renders the log_meal response (portions + daily_totals) from the tool-result bridge; layout <= ~150px tall at 320px width; light/dark theming works via the existing host-context mechanism.
 - [x] #4 Handler tests cover: resource serving, gating enabled/disabled/blocked-client for log_meal, build_resources listing.
 - [x] #5 Manual verification on a seeded local instance (TASK-54 flow): logging a multi-portion meal shows the widget alongside the text result. Screenshot batches <= 4 images per prompt (LiteLLM cap, see AGENTS.md); split larger comparisons across prompts/subagents.
@@ -53,5 +54,5 @@ Visual spec (approved design language): compact panel, target <= ~150px tall at 
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
-Shipped TASK-58.2: new food_added_widget.html asset plus the MCP-surface wiring that gates and serves it at ui://nom-mcp/food-added. log_meal now carries _meta.ui under the same widget_display_enabled + ui_blocked_clients gating as the existing widget tools. All 5 ACs verified: handler tests green in CI, functional e2e on a seeded instance, visual review SHIP (320x139, all statuses/theming correct).
+Shipped TASK-58.2: new food_added_widget.html asset plus the MCP-surface wiring that gates and serves it at ui://nom-mcp/food-added. log_meal now carries_meta.ui under the same widget_display_enabled + ui_blocked_clients gating as the existing widget tools. All 5 ACs verified: handler tests green in CI, functional e2e on a seeded instance, visual review SHIP (320x139, all statuses/theming correct).
 <!-- SECTION:FINAL_SUMMARY:END -->
