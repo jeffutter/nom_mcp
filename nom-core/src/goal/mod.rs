@@ -118,6 +118,20 @@ struct ActiveGoal {
     target_weight: Option<f64>,
 }
 
+/// Parse a stored direction string into a [`Direction`].
+///
+/// Shared by `GetGoalProgress` and [`daily_nutrient_progress`]: unknown or
+/// missing values yield `None` rather than an error (lenient parse, as goals
+/// rows have always been read).
+fn parse_direction(s: Option<&String>) -> Option<Direction> {
+    s.and_then(|d| match d.as_str() {
+        "target" => Some(Direction::Target),
+        "minimum" => Some(Direction::Minimum),
+        "maximum" => Some(Direction::Maximum),
+        _ => None,
+    })
+}
+
 /// Fetch the active goal as-of a given date.
 async fn fetch_active_goal(
     conn: &Connection,
@@ -302,6 +316,72 @@ pub(crate) fn nutrient_progress(
         direction,
         status,
     }
+}
+
+/// Per-nutrient daily progress — the five nutrient entries of
+/// `get_goal_progress`'s response, excluding weight and fasting hours.
+/// Consumed by `log_meal`'s post-insertion `daily_totals` (TASK-58).
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub(crate) struct DailyNutrientProgress {
+    pub calories: NutrientProgress,
+    pub protein_g: NutrientProgress,
+    pub carbs_g: NutrientProgress,
+    pub fat_g: NutrientProgress,
+    pub fiber_g: NutrientProgress,
+}
+
+/// Compute per-nutrient progress for `date` against the goal active as-of
+/// that date — the same computation `get_goal_progress` performs, minus
+/// weight/fasting/variant (weight is excluded because logging a meal cannot
+/// change weight progress). With no active goal the result matches
+/// `get_goal_progress` exactly: `consumed` populated, target-derived fields
+/// absent.
+pub(crate) async fn daily_nutrient_progress(
+    conn: &Connection,
+    date: &str,
+) -> Result<DailyNutrientProgress, ErrorData> {
+    let goal = fetch_active_goal(conn, date).await?;
+    let (cal, prot, carbs, fat, fiber) = fetch_consumed_totals(conn, date).await?;
+
+    // One entry per nutrient: (target value, direction string, consumed amount).
+    let nutrients: [(Option<f64>, Option<&String>, f64); 5] = [
+        (
+            goal.as_ref().and_then(|g| g.calories),
+            goal.as_ref().and_then(|g| g.calories_direction.as_ref()),
+            cal,
+        ),
+        (
+            goal.as_ref().and_then(|g| g.protein_g),
+            goal.as_ref().and_then(|g| g.protein_g_direction.as_ref()),
+            prot,
+        ),
+        (
+            goal.as_ref().and_then(|g| g.carbs_g),
+            goal.as_ref().and_then(|g| g.carbs_g_direction.as_ref()),
+            carbs,
+        ),
+        (
+            goal.as_ref().and_then(|g| g.fat_g),
+            goal.as_ref().and_then(|g| g.fat_g_direction.as_ref()),
+            fat,
+        ),
+        (
+            goal.as_ref().and_then(|g| g.fiber_g),
+            goal.as_ref().and_then(|g| g.fiber_g_direction.as_ref()),
+            fiber,
+        ),
+    ];
+
+    let mut progress = nutrients.into_iter().map(|(target, dir_str, consumed)| {
+        nutrient_progress(consumed, target, parse_direction(dir_str))
+    });
+    Ok(DailyNutrientProgress {
+        calories: progress.next().unwrap(),
+        protein_g: progress.next().unwrap(),
+        carbs_g: progress.next().unwrap(),
+        fat_g: progress.next().unwrap(),
+        fiber_g: progress.next().unwrap(),
+    })
 }
 
 /// Compute weight progress fields.
@@ -732,16 +812,6 @@ impl Operation for GetGoalProgress {
         let fasting_windows =
             crate::fasting::fetch_fasting_windows(&conn, &query_date, &query_date).await?;
         let fasting_hours = fasting_windows.first().map(|w| w.hours);
-
-        // Parse directions from goal
-        let parse_direction = |s: Option<&String>| -> Option<Direction> {
-            s.and_then(|d| match d.as_str() {
-                "target" => Some(Direction::Target),
-                "minimum" => Some(Direction::Minimum),
-                "maximum" => Some(Direction::Maximum),
-                _ => None,
-            })
-        };
 
         let goal_target_weight = goal.as_ref().and_then(|g| g.target_weight);
 

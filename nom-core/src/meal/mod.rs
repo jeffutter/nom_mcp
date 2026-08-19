@@ -741,11 +741,25 @@ impl Operation for LogMeal {
                     .await
                     .map_err(|e| ErrorData::storage_failure(format!("commit failed: {e}")))?;
 
+                // Post-commit read-back: the response reflects stored state
+                // (including food names, which resolve_portions discards), so
+                // it matches what was persisted by construction.
+                let summary = build_meal_summary(&conn, meal_id).await?;
+
+                // Post-insertion daily totals with per-nutrient progress
+                // against the goal active as-of logged_date. Same open
+                // connection (no second advisory-lock probe); weight is
+                // excluded — logging a meal cannot change weight progress.
+                let daily_totals =
+                    crate::goal::daily_nutrient_progress(&conn, &logged_date_str).await?;
+
                 Ok(serde_json::json!({
                     "meal_id": meal_id,
                     "logged_at": logged_at_str,
                     "logged_date": logged_date_str,
                     "totals": totals,
+                    "portions": summary.portions,
+                    "daily_totals": daily_totals,
                 }))
             }
             Err(e) => {
@@ -1702,6 +1716,233 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(err.category, crate::error::ErrorCategory::Validation);
+    }
+
+    // -----------------------------------------------------------------------
+    // TASK-58.1: per-portion breakdown + post-insertion daily totals
+    // -----------------------------------------------------------------------
+
+    /// Seed an active goal row (calories target only) effective from before
+    /// the test log date.
+    async fn seed_goal_calories(conn: &Connection, effective_from: &str, calories: f64) {
+        conn.execute(
+            "INSERT INTO goals (effective_from, calories, calories_direction) VALUES (?, ?, ?)",
+            (effective_from, calories, "target"),
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Pre-seed a meal row directly (bypassing LogMeal) to exercise
+    /// same-date summation in daily_totals.
+    async fn seed_meal_row(
+        conn: &Connection,
+        logged_date: &str,
+        cal: f64,
+        prot: f64,
+        carbs: f64,
+        fat: f64,
+        fiber: f64,
+    ) {
+        conn.execute(
+            "INSERT INTO meals (logged_at, logged_date, total_calories, total_protein_g, \
+             total_carbs_g, total_fat_g, total_fiber_g) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                format!("{logged_date}T08:00:00Z"),
+                logged_date,
+                cal,
+                prot,
+                carbs,
+                fat,
+                fiber,
+            ),
+        )
+        .await
+        .unwrap();
+    }
+
+    /// AC#1: multi-portion response carries a per-portion breakdown (food
+    /// names + macros for grams and servings modes) alongside the unchanged
+    /// pre-existing fields.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_log_meal_multi_portion_response_shape() {
+        let db = TempDb::new().await;
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        let chicken_id = seed_food(&conn, "Chicken Breast").await.unwrap();
+        let salmon_id = seed_food(&conn, "Salmon").await.unwrap();
+        drop(conn);
+
+        let clock = Clock { tz: chrono_tz::UTC };
+        let op = LogMeal::new(clock).with_db_path(db.path.clone());
+
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "logged_at": "2025-01-15T12:00:00Z",
+                "portions": [
+                    {"food_id": chicken_id, "quantity": 200.0, "quantity_mode": "grams"},
+                    {"food_id": salmon_id, "quantity": 2.0, "quantity_mode": "servings"}
+                ]
+            })))
+            .await
+            .unwrap();
+
+        // Pre-existing fields unchanged.
+        assert!(result["meal_id"].as_i64().unwrap() > 0);
+        assert_eq!(result["logged_at"], "2025-01-15T12:00:00Z");
+        assert_eq!(result["logged_date"], "2025-01-15");
+        // Chicken 200g: 500/40/60/16/6. Salmon 2x150g: 750/60/90/24/9.
+        assert_eq!(result["totals"]["total_calories"], 1250.0);
+        assert_eq!(result["totals"]["total_protein_g"], 100.0);
+        assert_eq!(result["totals"]["total_carbs_g"], 150.0);
+        assert_eq!(result["totals"]["total_fat_g"], 40.0);
+        assert_eq!(result["totals"]["total_fiber_g"], 15.0);
+
+        // New: per-portion breakdown in insertion order.
+        let portions = result["portions"].as_array().unwrap();
+        assert_eq!(portions.len(), 2);
+
+        let p0 = &portions[0];
+        assert_eq!(p0["food_name"], "Chicken Breast");
+        assert_eq!(p0["food_id"], chicken_id);
+        assert_eq!(p0["quantity_mode"], "grams");
+        assert_eq!(p0["quantity"], 200.0);
+        assert_eq!(p0["calories"], 500.0);
+        assert_eq!(p0["protein_g"], 40.0);
+        assert_eq!(p0["carbs_g"], 60.0);
+        assert_eq!(p0["fat_g"], 16.0);
+        assert_eq!(p0["fiber_g"], 6.0);
+
+        let p1 = &portions[1];
+        assert_eq!(p1["food_name"], "Salmon");
+        assert_eq!(p1["food_id"], salmon_id);
+        assert_eq!(p1["quantity_mode"], "servings");
+        assert_eq!(p1["quantity"], 2.0);
+        assert_eq!(p1["calories"], 750.0);
+        assert_eq!(p1["protein_g"], 60.0);
+        assert_eq!(p1["carbs_g"], 90.0);
+        assert_eq!(p1["fat_g"], 24.0);
+        assert_eq!(p1["fiber_g"], 9.0);
+
+        // Portion ids are real stored rows: positive and distinct.
+        assert!(p0["id"].as_i64().unwrap() > 0);
+        assert_ne!(p0["id"], p1["id"]);
+    }
+
+    /// AC#2: daily_totals sums pre-seeded same-date meals plus the new meal
+    /// and carries target/percent/status/direction from the active goal;
+    /// nutrients without targets stay consumed-only; weight is absent.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_log_meal_daily_totals_with_active_goal() {
+        let db = TempDb::new().await;
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        let food_id = seed_food(&conn, "Chicken Breast").await.unwrap();
+        seed_goal_calories(&conn, "2025-01-01", 2000.0).await;
+        seed_meal_row(&conn, "2025-01-15", 1000.0, 50.0, 80.0, 20.0, 5.0).await;
+        drop(conn);
+
+        let clock = Clock { tz: chrono_tz::UTC };
+        let op = LogMeal::new(clock).with_db_path(db.path.clone());
+
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "logged_at": "2025-01-15T12:00:00Z",
+                "portions": [
+                    {"food_id": food_id, "quantity": 200.0, "quantity_mode": "grams"}
+                ]
+            })))
+            .await
+            .unwrap();
+
+        // Calories: 1000 pre-seeded + 500 new = 1500 consumed vs 2000 target.
+        let cal = &result["daily_totals"]["calories"];
+        assert_eq!(cal["consumed"], 1500.0);
+        assert_eq!(cal["target"], 2000.0);
+        assert_eq!(cal["remaining"], 500.0);
+        assert_eq!(cal["percent"], 75.0);
+        assert_eq!(cal["direction"], "target");
+        assert_eq!(cal["status"], "under");
+
+        // Protein: 50 pre-seeded + 40 new, consumed-only (no target set).
+        let prot = &result["daily_totals"]["protein_g"];
+        assert_eq!(prot["consumed"], 90.0);
+        assert!(prot["target"].is_null());
+        assert!(prot["remaining"].is_null());
+        assert!(prot["percent"].is_null());
+        assert!(prot["status"].is_null());
+
+        // Weight must not appear: logging a meal cannot change it.
+        assert!(result["daily_totals"].get("weight").is_none());
+    }
+
+    /// AC#2: with no active goal, daily_totals matches get_goal_progress's
+    /// no-goal shape — consumed populated, all target-derived fields absent.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_log_meal_daily_totals_without_goal() {
+        let db = TempDb::new().await;
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        let food_id = seed_food(&conn, "Chicken Breast").await.unwrap();
+        drop(conn);
+
+        let clock = Clock { tz: chrono_tz::UTC };
+        let op = LogMeal::new(clock).with_db_path(db.path.clone());
+
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "logged_at": "2025-01-15T12:00:00Z",
+                "portions": [
+                    {"food_id": food_id, "quantity": 200.0, "quantity_mode": "grams"}
+                ]
+            })))
+            .await
+            .unwrap();
+
+        let cal = &result["daily_totals"]["calories"];
+        assert_eq!(cal["consumed"], 500.0);
+        assert!(cal["target"].is_null());
+        assert!(cal["remaining"].is_null());
+        assert!(cal["percent"].is_null());
+        assert!(cal["direction"].is_null());
+        assert!(cal["status"].is_null());
+    }
+
+    /// AC#3: the meal-level adjustment flows into totals and daily_totals
+    /// (meals.total_* stores the adjusted sum) but never into the per-portion
+    /// macros, which stay pure snapshot computations.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_log_meal_adjustment_in_daily_totals_not_portion_macros() {
+        let db = TempDb::new().await;
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        let food_id = seed_food(&conn, "Chicken Breast").await.unwrap();
+        seed_goal_calories(&conn, "2025-01-01", 2000.0).await;
+        drop(conn);
+
+        let clock = Clock { tz: chrono_tz::UTC };
+        let op = LogMeal::new(clock).with_db_path(db.path.clone());
+
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({
+                "logged_at": "2025-01-15T12:00:00Z",
+                "portions": [
+                    {"food_id": food_id, "quantity": 200.0, "quantity_mode": "grams"}
+                ],
+                "adjustment": {"calories": -150.0}
+            })))
+            .await
+            .unwrap();
+
+        // Adjustment applies to the meal total...
+        assert_eq!(result["totals"]["total_calories"], 350.0);
+        // ...and to daily consumption (350 total for the day).
+        assert_eq!(result["daily_totals"]["calories"]["consumed"], 350.0);
+        assert_eq!(result["daily_totals"]["calories"]["remaining"], 1650.0);
+        assert_eq!(result["daily_totals"]["calories"]["percent"], 17.5);
+        assert_eq!(result["daily_totals"]["calories"]["status"], "under");
+        // ...but the portion macro stays the unadjusted snapshot computation.
+        assert_eq!(result["portions"][0]["calories"], 500.0);
     }
 
     #[serial_test::serial]

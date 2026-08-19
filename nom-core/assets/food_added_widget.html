@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light dark">
+<title>Food Added</title>
+<style>
+  :root {
+    --bg: light-dark(#ffffff, #171717);
+    --fg: light-dark(#171717, #fafafa);
+    --fg-muted: light-dark(#6b6b6b, #a3a3a3);
+    --border: light-dark(#e5e5e5, #333333);
+    --track: light-dark(#eeeeee, #262626);
+    --under: light-dark(#2563eb, #60a5fa);
+    --met: light-dark(#16a34a, #4ade80);
+    --over: light-dark(#dc2626, #f87171);
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans, var(--font));
+  }
+
+  body {
+    padding: 12px;
+  }
+
+  /* Slim date header line. */
+  .header {
+    font-size: 11px;
+    color: var(--fg-muted);
+    margin: 0 0 6px 0;
+    line-height: 1;
+  }
+
+  /* Two-column layout: logged portions left, daily-total rings right. */
+  .layout {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .portions {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .portion-row {
+    margin-bottom: 6px;
+  }
+
+  .portion-row:last-child {
+    margin-bottom: 0;
+  }
+
+  .portion-line1 {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 11px;
+    line-height: 1.2;
+  }
+
+  .portion-name {
+    font-weight: 600;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .portion-kcal {
+    flex: 0 0 auto;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .portion-kcal small {
+    font-size: 8px;
+    font-weight: 400;
+    color: var(--fg-muted);
+  }
+
+  .portion-sub {
+    font-size: 9px;
+    color: var(--fg-muted);
+    margin-top: 1px;
+    line-height: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Daily totals: five status-colored rings in a 3x2 grid. */
+  .rings {
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: repeat(3, 34px);
+    gap: 8px 10px;
+    justify-items: center;
+  }
+
+  .ring-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .ring-wrap {
+    position: relative;
+    width: 34px;
+    height: 34px;
+  }
+
+  .ring-wrap svg {
+    display: block;
+  }
+
+  .ring-center {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 8px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .ring-label {
+    font-size: 8px;
+    color: var(--fg-muted);
+    margin-top: 2px;
+    line-height: 1;
+  }
+
+  /* SVG donut rings: track circle + status-colored fill circle.
+     Both circles must opt out of the SVG default (solid black) fill, or the
+     fill circle paints a solid disc over the donut hole. */
+  .ring-track,
+  .ring-fill {
+    fill: none;
+  }
+
+  .ring-track { stroke: var(--track); }
+
+  .ring-fill.status-under { stroke: var(--under); }
+  .ring-fill.status-met { stroke: var(--met); }
+  .ring-fill.status-over { stroke: var(--over); }
+
+  .placeholder {
+    color: var(--fg-muted);
+    font-size: 13px;
+    padding: 12px 0;
+  }
+</style>
+</head>
+<body>
+  <div id="app">
+    <p class="placeholder">Waiting for meal data&hellip;</p>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------------
+  // Minimal JSON-RPC 2.0 over postMessage, per the MCP Apps spec's own
+  // "you don't need an SDK to talk MCP with the host" reference snippet
+  // (specification/2026-01-26/apps.mdx, "Transport Layer" section).
+  // ---------------------------------------------------------------------
+
+  var nextId = 1;
+  var pending = {};
+
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (!data || typeof data !== "object") return;
+
+    if (data.id !== undefined && pending[data.id]) {
+      var entry = pending[data.id];
+      delete pending[data.id];
+      if ("result" in data) {
+        entry.resolve(data.result);
+      } else if ("error" in data) {
+        entry.reject(new Error((data.error && data.error.message) || "RPC error"));
+      }
+      return;
+    }
+
+    if (data.method) {
+      var handlers = notificationHandlers[data.method];
+      if (handlers) {
+        handlers.forEach(function (h) { h(data.params || {}); });
+      }
+    }
+  });
+
+  function sendRequest(method, params) {
+    var id = nextId++;
+    return new Promise(function (resolve, reject) {
+      pending[id] = { resolve: resolve, reject: reject };
+      window.parent.postMessage({ jsonrpc: "2.0", id: id, method: method, params: params }, "*");
+    });
+  }
+
+  function sendNotification(method, params) {
+    window.parent.postMessage({ jsonrpc: "2.0", method: method, params: params }, "*");
+  }
+
+  var notificationHandlers = {};
+  function onNotification(method, handler) {
+    (notificationHandlers[method] = notificationHandlers[method] || []).push(handler);
+  }
+
+  // ---------------------------------------------------------------------
+  // Rendering
+  // ---------------------------------------------------------------------
+
+  var appEl = document.getElementById("app");
+
+  var NUTRIENTS = [
+    { key: "calories", label: "Cal", unit: "" },
+    { key: "protein_g", label: "Prot", unit: "g" },
+    { key: "carbs_g", label: "Carb", unit: "g" },
+    { key: "fat_g", label: "Fat", unit: "g" },
+    { key: "fiber_g", label: "Fib", unit: "g" }
+  ];
+
+  function fmt(n) {
+    if (n === undefined || n === null) return "";
+    return Math.round(n * 10) / 10;
+  }
+
+  // Escapes a value for safe interpolation into innerHTML. The widget must
+  // not rely on server-side validation alone since it cannot verify who
+  // produced the tool result it renders.
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  // Donut ring as inline SVG. The fill circle uses pathLength="100" so
+  // stroke-dasharray maps directly to a percentage — no circumference math.
+  // fillPct null/undefined or <= 0 draws only the neutral track; values over
+  // 100 cap the arc at a full ring (the true number still shows in text).
+  function ringSvg(size, fillPct, cls) {
+    var c = size / 2;
+    var sw = Math.max(3, Math.round(size * 0.15));
+    var r = c - sw / 2 - 0.5;
+    var html = '<svg width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '" aria-hidden="true">';
+    html += '<circle class="ring-track" cx="' + c + '" cy="' + c + '" r="' + r + '" stroke-width="' + sw + '"/>';
+    if (fillPct !== undefined && fillPct !== null && fillPct > 0) {
+      var dash = Math.max(0, Math.min(100, fillPct));
+      html += '<circle class="ring-fill ' + escapeHtml(cls) + '" cx="' + c + '" cy="' + c + '" r="' + r + '" ' +
+        'pathLength="100" stroke-dasharray="' + dash + ' 100" stroke-linecap="round" ' +
+        'transform="rotate(-90 ' + c + ' ' + c + ')" stroke-width="' + sw + '"/>';
+    }
+    html += "</svg>";
+    return html;
+  }
+
+  // Text centered inside a compact ring: percent-of-goal when available,
+  // otherwise the consumed value (covers no-target and zero-target cases).
+  function centerText(p, unit) {
+    p = p || {};
+    if (p.percent !== undefined && p.percent !== null) {
+      return Math.round(p.percent) + "%";
+    }
+    return fmt(p.consumed) + unit;
+  }
+
+  // Left column: one row per logged portion — food name + kcal on line 1,
+  // P/C/F subline below. All strings escaped.
+  function portionsHtml(portions) {
+    var html = "";
+    (portions || []).forEach(function (p) {
+      html +=
+        '<div class="portion-row">' +
+          '<div class="portion-line1">' +
+            '<span class="portion-name">' + escapeHtml(p.food_name || "") + "</span>" +
+            '<span class="portion-kcal">' + fmt(p.calories) + " <small>kcal</small></span>" +
+          "</div>" +
+          '<div class="portion-sub">P ' + fmt(p.protein_g) +
+            " &middot; C " + fmt(p.carbs_g) +
+            " &middot; F " + fmt(p.fat_g) + "</div>" +
+        "</div>";
+    });
+    return html;
+  }
+
+  // Right column: five status-colored rings (under=blue, met=green,
+  // over=red) with percent-of-goal centered inside each and a tiny nutrient
+  // label below.
+  function ringsHtml(dailyTotals) {
+    var html = "";
+    NUTRIENTS.forEach(function (n) {
+      var p = (dailyTotals && dailyTotals[n.key]) || {};
+      var fill = p.percent !== undefined && p.percent !== null ? p.percent : null;
+      var status = p.status || "under";
+      html +=
+        '<div class="ring-cell">' +
+          '<div class="ring-wrap">' +
+            ringSvg(34, fill, "status-" + status) +
+            '<span class="ring-center">' + escapeHtml(centerText(p, n.unit)) + "</span>" +
+          "</div>" +
+          '<span class="ring-label">' + escapeHtml(n.label) + "</span>" +
+        "</div>";
+    });
+    return html;
+  }
+
+  function render(data) {
+    var html = '<p class="header">' + escapeHtml(data.logged_date || "") + "</p>";
+    html += '<div class="layout">';
+    html += '<div class="portions">' + portionsHtml(data.portions) + "</div>";
+    html += '<div class="rings">' + ringsHtml(data.daily_totals) + "</div>";
+    html += "</div>";
+    appEl.innerHTML = html;
+    reportSize();
+  }
+
+  function renderError(message) {
+    appEl.innerHTML = '<p class="placeholder">' + escapeHtml(message) + "</p>";
+  }
+
+  function extractLogMeal(toolResult) {
+    if (!toolResult || !toolResult.content || !toolResult.content.length) return null;
+    var block = toolResult.content[0];
+    if (!block || typeof block.text !== "string") return null;
+    try {
+      return JSON.parse(block.text);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Theming: apply host-provided CSS variables/theme if present.
+  // ---------------------------------------------------------------------
+
+  function applyHostContext(ctx) {
+    if (!ctx) return;
+    if (ctx.theme === "light" || ctx.theme === "dark") {
+      document.documentElement.style.colorScheme = ctx.theme;
+    }
+    if (ctx.styles && ctx.styles.variables) {
+      Object.keys(ctx.styles.variables).forEach(function (key) {
+        var value = ctx.styles.variables[key];
+        if (value !== undefined && value !== null) {
+          document.documentElement.style.setProperty(key, value);
+        }
+      });
+    }
+  }
+
+  var lastSize = { width: 0, height: 0 };
+  function reportSize() {
+    var width = document.documentElement.scrollWidth;
+    var height = document.documentElement.scrollHeight;
+    if (width === lastSize.width && height === lastSize.height) return;
+    lastSize = { width: width, height: height };
+    sendNotification("ui/notifications/size-changed", { width: width, height: height });
+  }
+
+  if (typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(reportSize).observe(document.documentElement);
+  }
+
+  // ---------------------------------------------------------------------
+  // Handshake + lifecycle
+  // ---------------------------------------------------------------------
+
+  onNotification("ui/notifications/tool-input", function () {
+    // Arguments only; the rendered payload comes from tool-result.
+  });
+
+  onNotification("ui/notifications/tool-result", function (params) {
+    var data = extractLogMeal(params);
+    if (data) {
+      render(data);
+    } else {
+      renderError("Unable to read log_meal result.");
+    }
+  });
+
+  onNotification("ui/notifications/tool-cancelled", function () {
+    renderError("Tool call was cancelled.");
+  });
+
+  onNotification("ui/notifications/host-context-changed", function (ctx) {
+    applyHostContext(ctx);
+  });
+
+  sendRequest("ui/initialize", {
+    appCapabilities: {},
+    appInfo: { name: "nom-mcp-food-added-widget", version: "1.0.0" },
+    protocolVersion: "2026-01-26"
+  }).then(function (result) {
+    applyHostContext(result && result.hostContext);
+    sendNotification("ui/notifications/initialized", {});
+  }).catch(function (err) {
+    renderError("Failed to initialize: " + err.message);
+  });
+})();
+</script>
+</body>
+</html>
