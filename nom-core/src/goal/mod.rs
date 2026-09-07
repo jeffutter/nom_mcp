@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::clock::Clock;
 use crate::error::ErrorData;
+use crate::meal_type::MealTypeTotals;
 use crate::operation::Operation;
 use crate::storage::Connection;
 
@@ -88,6 +89,10 @@ struct GoalProgress {
     /// no Meal exists after it.
     #[serde(skip_serializing_if = "Option::is_none", rename = "fasting_hours")]
     fasting_hours: Option<f64>,
+    /// Whole-day nutrients split by meal type (breakfast, lunch, dinner, then
+    /// any legacy `null` bucket) so a reader can tell which meal contributed
+    /// what. The nutrient rings above stay whole-day totals; this is additive.
+    meals_by_type: Vec<MealTypeTotals>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -752,7 +757,7 @@ impl Operation for GetGoalProgress {
     }
 
     fn description(&self) -> &str {
-        "Get goal progress for a specific date (defaults to today). Returns per-nutrient consumed vs target comparison and weight progress. Accepts an optional `variant` ('compact' | 'expanded', default 'compact') selecting how the widget renders the result: 'compact' is a single row of small rings; 'expanded' is a fuller card-grid daily summary. Use 'expanded' when the user asks for a fuller view."
+        "Get goal progress for a specific date (defaults to today). Returns per-nutrient consumed vs target comparison and weight progress, plus `meals_by_type`: that day's totals split into breakfast/lunch/dinner (legacy meals predating the field appear as a null-labelled bucket). Accepts an optional `variant` ('compact' | 'expanded', default 'compact') selecting how the widget renders the result: 'compact' is a single row of small rings; 'expanded' is a fuller card-grid daily summary. Use 'expanded' when the user asks for a fuller view."
     }
 
     fn input_schema(&self) -> Option<serde_json::Value> {
@@ -813,6 +818,19 @@ impl Operation for GetGoalProgress {
             crate::fasting::fetch_fasting_windows(&conn, &query_date, &query_date).await?;
         let fasting_hours = fasting_windows.first().map(|w| w.hours);
 
+        // Per-meal-type breakdown for the same date. A second pass over the
+        // day's Meals rather than an extra column on fetch_consumed_totals:
+        // that query feeds the rings and must keep returning whole-day sums,
+        // and one grouped read over a single indexed date is cheap enough to
+        // buy the separation.
+        let meals_by_type =
+            crate::meal_type::fetch_days_by_meal_type(&conn, &query_date, &query_date)
+                .await?
+                .into_iter()
+                .next()
+                .map(|day| day.by_meal_type)
+                .unwrap_or_default();
+
         let goal_target_weight = goal.as_ref().and_then(|g| g.target_weight);
 
         // One entry per nutrient: (target value, direction string, consumed amount).
@@ -867,6 +885,7 @@ impl Operation for GetGoalProgress {
             fiber_g: fiber_g_progress,
             weight: weight_progress,
             fasting_hours,
+            meals_by_type,
         })
         .map_err(|e| ErrorData::storage_failure(format!("serialization failed: {e}")))?)
     }
@@ -1153,6 +1172,8 @@ mod tests {
 
     // ---- GetGoalProgress tests (AC #2, #3) ----
 
+    /// Seed a Meal in the pre-v2 shape (no `meal_type`), i.e. the legacy
+    /// `null` bucket.
     async fn seed_meal(
         conn: &Connection,
         logged_date: &str,
@@ -1165,6 +1186,23 @@ mod tests {
         conn.execute(
             "INSERT INTO meals (logged_at, logged_date, total_calories, total_protein_g, total_carbs_g, total_fat_g, total_fiber_g) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (format!("{}T12:00:00Z", logged_date), logged_date, calories, protein, carbs, fat, fiber),
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Seed a Meal with an explicit `meal_type`. `macros` is
+    /// `[calories, protein_g, carbs_g, fat_g, fiber_g]`.
+    async fn seed_typed_meal(
+        conn: &Connection,
+        logged_date: &str,
+        meal_type: &str,
+        macros: [f64; 5],
+    ) {
+        let [calories, protein, carbs, fat, fiber] = macros;
+        conn.execute(
+            "INSERT INTO meals (logged_at, logged_date, total_calories, total_protein_g, total_carbs_g, total_fat_g, total_fiber_g, meal_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (format!("{logged_date}T12:00:00Z"), logged_date, calories, protein, carbs, fat, fiber, meal_type),
         )
         .await
         .unwrap();
@@ -1656,5 +1694,82 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(err.category, ErrorCategory::Validation);
+    }
+
+    // ---- Per-meal-type breakdown (TASK-62.3, AC #7) ----
+
+    async fn goal_progress(
+        conn_path: &std::path::Path,
+        clock: Clock,
+        date: &str,
+    ) -> serde_json::Value {
+        let op = GetGoalProgress::new(clock).with_db_path(conn_path.to_path_buf());
+        op.execute_json(Arc::new(serde_json::json!({ "date": date })))
+            .await
+            .unwrap()
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_goal_progress_splits_day_by_meal_type() {
+        let db = TempDb::new().await;
+        let clock = clock();
+
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        seed_goal(&conn, "2025-01-01", 2000.0, "target").await;
+        seed_typed_meal(
+            &conn,
+            "2025-01-15",
+            "dinner",
+            [700.0, 30.0, 50.0, 20.0, 5.0],
+        )
+        .await;
+        seed_typed_meal(
+            &conn,
+            "2025-01-15",
+            "breakfast",
+            [300.0, 10.0, 30.0, 8.0, 3.0],
+        )
+        .await;
+        // Legacy row: counts toward the day and shows up as a null bucket.
+        seed_meal(&conn, "2025-01-15", 100.0, 5.0, 10.0, 4.0, 1.0).await;
+        // A neighbouring day must not leak in.
+        seed_typed_meal(
+            &conn,
+            "2025-01-14",
+            "lunch",
+            [999.0, 99.0, 99.0, 99.0, 99.0],
+        )
+        .await;
+        drop(conn);
+
+        let result = goal_progress(&db.path, clock, "2025-01-15").await;
+
+        let buckets = result["meals_by_type"].as_array().unwrap();
+        assert_eq!(buckets.len(), 3);
+        assert_eq!(buckets[0]["meal_type"].as_str(), Some("breakfast"));
+        assert_eq!(buckets[0]["calories"].as_f64().unwrap(), 300.0);
+        assert_eq!(buckets[1]["meal_type"].as_str(), Some("dinner"));
+        assert_eq!(buckets[1]["protein_g"].as_f64().unwrap(), 30.0);
+        assert!(buckets[2]["meal_type"].is_null(), "legacy bucket last");
+        assert_eq!(buckets[2]["calories"].as_f64().unwrap(), 100.0);
+
+        assert_eq!(
+            result["calories"]["consumed"].as_f64().unwrap(),
+            1100.0,
+            "whole-day rings unchanged by the new section"
+        );
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_goal_progress_meals_by_type_empty_is_array() {
+        let db = TempDb::new().await;
+        let clock = clock();
+
+        let result = goal_progress(&db.path, clock, "2025-01-15").await;
+
+        assert_eq!(result["meals_by_type"].as_array().unwrap().len(), 0);
+        assert!(result["meals_by_type"].is_array(), "empty is [], not null");
     }
 }

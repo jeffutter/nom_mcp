@@ -1,10 +1,11 @@
 ---
 id: TASK-62.3
 title: Group daily and weekly summary output by meal type
-status: Dev Ready
-assignee: []
+status: Done
+assignee:
+  - '@ralph'
 created_date: '2026-09-07 01:28'
-updated_date: '2026-09-07 01:30'
+updated_date: '2026-09-07 02:57'
 labels:
   - task
   - planned
@@ -30,12 +31,12 @@ Out of scope: widgets (TASK-62.5), docs (TASK-62.4), changing goal's day-level N
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 One shared aggregate groups meals by (logged_date, meal_type) and is consumed by both weekly and goal modules — no duplicated meal SUM SQL
-- [ ] #2 Weekly Summary daily_totals gain a by_meal_type breakdown while existing day-level fields, ordering and days_with_data semantics stay byte-compatible for widgets
-- [ ] #3 get_goal_progress gains a per-meal-type section for the requested date without changing its whole-day NutrientProgress values
-- [ ] #4 Both the nom://weekly-summary resource JSON and get_weekly_progress tool output expose the new breakdown
-- [ ] #5 Legacy rows with NULL meal_type appear in a null-labelled bucket and still count toward day totals
-- [ ] #6 Tests cover multi-type/multi-day splits, empty results ([] not null), legacy null bucket, and unchanged day totals
+- [x] #1 One shared aggregate groups meals by (logged_date, meal_type) and is consumed by both weekly and goal modules — no duplicated meal SUM SQL
+- [x] #2 Weekly Summary daily_totals gain a by_meal_type breakdown while existing day-level fields, ordering and days_with_data semantics stay byte-compatible for widgets
+- [x] #3 get_goal_progress gains a per-meal-type section for the requested date without changing its whole-day NutrientProgress values
+- [x] #4 Both the nom://weekly-summary resource JSON and get_weekly_progress tool output expose the new breakdown
+- [x] #5 Legacy rows with NULL meal_type appear in a null-labelled bucket and still count toward day totals
+- [x] #6 Tests cover multi-type/multi-day splits, empty results ([] not null), legacy null bucket, and unchanged day totals
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -108,3 +109,17 @@ nix develop .#ci -c cargo test --doc --all-features --workspace
 
 Both summaries label/group by meal type (AC #7), legacy NULL rows are visible rather than dropped, day-level output is unchanged for existing consumers, and CI is green.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented as planned. nom-core/src/meal_type.rs gains fetch_days_by_meal_type() -> Vec<DayByMealType>: one GROUP BY logged_date, meal_type query, private TotalsRow wire shape, fold in Rust that sums whole-day totals and orders buckets breakfast/lunch/dinner with the legacy NULL bucket last (SQLite sorts NULL first, so ordering happens in Rust via bucket_rank). weekly::fetch_daily_totals (the second SUM query) is deleted; DailyTotals is built From<DayByMealType> and gains only by_meal_type: Vec<MealTypeTotals>. goal::GetGoalProgress gains meals_by_type, populated by the same helper with start==end; fetch_consumed_totals and NutrientProgress untouched. Tests: 4 pure fold/serde tests + 2 DB-backed helper tests in meal_type.rs; 3 weekly tests (multi-type/multi-day split, legacy null bucket, get_weekly_progress exposure); 2 goal tests (split incl. neighbour-day isolation and unchanged consumed, empty == []); 1 mcp_handler resource test asserting nutrients.daily_totals[0].by_meal_type in the nom://weekly-summary JSON.
+
+Fixup applied post-review: fetch_days_by_meal_type's SQL ordered only by logged_date, not (logged_date, meal_type). fold_rows() requires all rows for a date to be contiguous, but ORDER BY logged_date alone leaves tie order among same-date meal_type rows unspecified by SQL semantics — it only worked because SQLite's current GROUP BY implementation happens to emit rows pre-sorted by the full grouping key. Added meal_type as a secondary ORDER BY key to make the contiguity guarantee explicit rather than relying on undocumented engine behavior. All 379 tests + fmt + clippy -D warnings still pass.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+One shared (logged_date, meal_type) aggregate now feeds both summaries. meal_type::fetch_days_by_meal_type is its only SQL; weekly's duplicate per-day SUM query is gone. Weekly Summary daily_totals entries gained by_meal_type and get_goal_progress gained meals_by_type; day-level fields, ordering, days_with_data and ring values are untouched. Legacy NULL rows land in a trailing null-labelled bucket and still count toward day totals. 11 new tests (3 pure fold/serde + 2 DB-backed in meal_type.rs, 3 weekly, 2 goal, 1 MCP resource). Gate green: fmt, clippy -D warnings, 379 nextest tests, doctests. Verified live on a seeded temp DB: nom://weekly-summary resource JSON and get_weekly_progress tool output are byte-identical and both carry the breakdown.
+<!-- SECTION:FINAL_SUMMARY:END -->

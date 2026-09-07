@@ -15,6 +15,7 @@ use crate::error::ErrorData;
 use crate::goal::{
     Direction, NutrientProgress, ProgressStatus, nutrient_progress, weight_progress,
 };
+use crate::meal_type::{DayByMealType, MealTypeTotals, fetch_days_by_meal_type};
 use crate::operation::{Operation, Surfaces};
 use crate::storage::Connection;
 
@@ -60,6 +61,24 @@ pub struct DailyTotals {
     carbs_g: f64,
     fat_g: f64,
     fiber_g: f64,
+    /// Same day split by meal type (breakfast, lunch, dinner, then any legacy
+    /// `null` bucket). Empty only when the day had no Meals, which never
+    /// happens for a day present in `daily_totals`.
+    by_meal_type: Vec<MealTypeTotals>,
+}
+
+impl From<DayByMealType> for DailyTotals {
+    fn from(day: DayByMealType) -> Self {
+        DailyTotals {
+            date: day.date,
+            calories: day.calories,
+            protein_g: day.protein_g,
+            carbs_g: day.carbs_g,
+            fat_g: day.fat_g,
+            fiber_g: day.fiber_g,
+            by_meal_type: day.by_meal_type,
+        }
+    }
 }
 
 /// Weight trend summary for the rolling window.
@@ -101,9 +120,9 @@ pub struct FastingSummary {
 
 /// Fetch the weekly summary for the rolling 7-day window ending today.
 ///
-/// Queries meals grouped by date, weight entries in the window, and the
-/// latest known weight (from before or within the window). Computes daily
-/// averages across all 7 days and compares against the active goal.
+/// Queries meals grouped by date and meal type, weight entries in the window,
+/// and the latest known weight (from before or within the window). Computes
+/// daily averages across all 7 days and compares against the active goal.
 pub async fn fetch_weekly_summary(
     conn: &Connection,
     clock: &Clock,
@@ -111,8 +130,12 @@ pub async fn fetch_weekly_summary(
     let today = Clock::format_date(clock.today());
     let start_date = rolling_start_date(&today);
 
-    // 1. Daily totals grouped by date
-    let daily_totals = fetch_daily_totals(conn, &start_date, &today).await?;
+    // 1. Daily totals grouped by date, split by meal type
+    let daily_totals: Vec<DailyTotals> = fetch_days_by_meal_type(conn, &start_date, &today)
+        .await?
+        .into_iter()
+        .map(DailyTotals::from)
+        .collect();
 
     // 2. Compute daily averages (sum / 7, not sum / days_with_data)
     let num_days = 7.0;
@@ -378,54 +401,6 @@ async fn fetch_active_goal(
     }
 }
 
-async fn fetch_daily_totals(
-    conn: &Connection,
-    start_date: &str,
-    end_date: &str,
-) -> Result<Vec<DailyTotals>, ErrorData> {
-    let sql = r#"
-        SELECT logged_date,
-               COALESCE(SUM(total_calories), 0.0),
-               COALESCE(SUM(total_protein_g), 0.0),
-               COALESCE(SUM(total_carbs_g), 0.0),
-               COALESCE(SUM(total_fat_g), 0.0),
-               COALESCE(SUM(total_fiber_g), 0.0)
-        FROM meals
-        WHERE logged_date BETWEEN ? AND ?
-        GROUP BY logged_date
-        ORDER BY logged_date
-    "#;
-    let mut stmt = conn
-        .prepare(sql)
-        .await
-        .map_err(|e| ErrorData::storage_failure(format!("prepare failed: {e}")))?;
-    let mut rows = stmt
-        .query((start_date, end_date))
-        .await
-        .map_err(|e| ErrorData::storage_failure(format!("query failed: {e}")))?;
-
-    let mut totals = Vec::new();
-    while let Some(row) = rows
-        .next()
-        .await
-        .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
-    {
-        let date = row
-            .get::<String>(0)
-            .map_err(|e| ErrorData::storage_failure(format!("failed to read date: {e}")))?;
-        totals.push(DailyTotals {
-            date,
-            calories: row.get::<f64>(1).unwrap_or(0.0),
-            protein_g: row.get::<f64>(2).unwrap_or(0.0),
-            carbs_g: row.get::<f64>(3).unwrap_or(0.0),
-            fat_g: row.get::<f64>(4).unwrap_or(0.0),
-            fiber_g: row.get::<f64>(5).unwrap_or(0.0),
-        });
-    }
-
-    Ok(totals)
-}
-
 async fn fetch_weight_entries_in_range(
     conn: &Connection,
     start_date: &str,
@@ -513,6 +488,9 @@ mod tests {
         Clock { tz: chrono_tz::UTC }
     }
 
+    /// Seed a Meal in the pre-v2 shape: no `meal_type`, so it reads back as the
+    /// legacy `null` bucket. Existing day-total expectations therefore keep
+    /// covering the "row without a meal type" path.
     async fn seed_meal(
         conn: &Connection,
         logged_date: &str,
@@ -829,6 +807,147 @@ mod tests {
             .find(|d| d["date"] == today)
             .expect("today's totals present");
         assert_eq!(today_total["calories"].as_f64().unwrap(), 1500.0);
+    }
+
+    /// Seed a Meal with an explicit `meal_type`. `macros` is
+    /// `[calories, protein_g, carbs_g, fat_g, fiber_g]`.
+    async fn seed_typed_meal(
+        conn: &Connection,
+        logged_date: &str,
+        meal_type: &str,
+        macros: [f64; 5],
+    ) {
+        let [calories, protein, carbs, fat, fiber] = macros;
+        conn.execute(
+            "INSERT INTO meals (logged_at, logged_date, total_calories, total_protein_g, total_carbs_g, total_fat_g, total_fiber_g, meal_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (format!("{logged_date}T12:00:00Z"), logged_date, calories, protein, carbs, fat, fiber, meal_type),
+        )
+        .await
+        .unwrap();
+    }
+
+    fn bucket_labels(day: &DailyTotals) -> Vec<Option<String>> {
+        day.by_meal_type
+            .iter()
+            .map(|b| b.meal_type.clone())
+            .collect()
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_weekly_summary_splits_daily_totals_by_meal_type() {
+        let db = TempDb::new().await;
+        let clock = clock();
+        let today = Clock::format_date(clock.today());
+        let yesterday = Clock::format_date(clock.today() - chrono::Days::new(1));
+
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        // Seeded out of canonical order on purpose: the SQL groups in whatever
+        // order SQLite yields, and the reader still expects breakfast first.
+        seed_typed_meal(&conn, &yesterday, "dinner", [700.0, 30.0, 50.0, 20.0, 5.0]).await;
+        seed_typed_meal(
+            &conn,
+            &yesterday,
+            "breakfast",
+            [300.0, 10.0, 30.0, 8.0, 3.0],
+        )
+        .await;
+        seed_typed_meal(&conn, &today, "lunch", [500.0, 25.0, 40.0, 15.0, 4.0]).await;
+        seed_typed_meal(&conn, &today, "breakfast", [250.0, 12.0, 35.0, 9.0, 3.0]).await;
+        seed_typed_meal(&conn, &today, "dinner", [600.0, 28.0, 45.0, 18.0, 6.0]).await;
+        drop(conn);
+
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        let summary = fetch_weekly_summary(&conn, &clock).await.unwrap();
+
+        let totals = &summary.nutrients.daily_totals;
+        assert_eq!(totals.len(), 2);
+        assert_eq!(totals[0].date, yesterday);
+        assert_eq!(totals[1].date, today);
+        assert_eq!(summary.days_with_data, 2, "day semantics unchanged");
+
+        assert_eq!(
+            bucket_labels(&totals[0]),
+            vec![Some("breakfast".into()), Some("dinner".into())]
+        );
+        assert_eq!(totals[0].by_meal_type[0].calories, 300.0);
+        assert_eq!(totals[0].by_meal_type[1].calories, 700.0);
+        assert_eq!(totals[0].calories, 1000.0, "day total is the bucket sum");
+        assert_eq!(totals[0].protein_g, 40.0);
+
+        assert_eq!(
+            bucket_labels(&totals[1]),
+            vec![
+                Some("breakfast".into()),
+                Some("lunch".into()),
+                Some("dinner".into())
+            ]
+        );
+        assert_eq!(totals[1].calories, 1350.0);
+        assert_eq!(totals[1].by_meal_type[1].protein_g, 25.0);
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_weekly_summary_legacy_rows_land_in_null_bucket() {
+        let db = TempDb::new().await;
+        let clock = clock();
+        let today = Clock::format_date(clock.today());
+
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        seed_typed_meal(&conn, &today, "breakfast", [300.0, 10.0, 30.0, 8.0, 3.0]).await;
+        // A row written before the column existed: NULL meal_type.
+        seed_meal(&conn, &today, 100.0, 5.0, 10.0, 4.0, 1.0).await;
+        drop(conn);
+
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        let summary = fetch_weekly_summary(&conn, &clock).await.unwrap();
+
+        let totals = &summary.nutrients.daily_totals;
+        assert_eq!(totals.len(), 1);
+        assert_eq!(
+            bucket_labels(&totals[0]),
+            vec![Some("breakfast".into()), None],
+            "legacy rows are reported, never dropped"
+        );
+        assert_eq!(totals[0].by_meal_type[1].calories, 100.0);
+        assert_eq!(
+            totals[0].calories, 400.0,
+            "legacy rows count toward the day"
+        );
+
+        // And it serializes as an explicit null rather than a missing key.
+        let json = serde_json::to_value(&summary).unwrap();
+        assert!(json["nutrients"]["daily_totals"][0]["by_meal_type"][1]["meal_type"].is_null());
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_get_weekly_progress_exposes_meal_type_breakdown() {
+        let db = TempDb::new().await;
+        let clock = clock();
+        let today = Clock::format_date(clock.today());
+
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        seed_typed_meal(&conn, &today, "lunch", [500.0, 25.0, 40.0, 15.0, 4.0]).await;
+        drop(conn);
+
+        let op = GetWeeklyProgress::new(clock).with_db_path(db.path.clone());
+        let result = op
+            .execute_json(Arc::new(serde_json::json!({})))
+            .await
+            .unwrap();
+
+        let day = result["nutrients"]["daily_totals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["date"] == today)
+            .expect("today's totals present");
+        let buckets = day["by_meal_type"].as_array().unwrap();
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0]["meal_type"].as_str(), Some("lunch"));
+        assert_eq!(buckets[0]["calories"].as_f64().unwrap(), 500.0);
     }
 
     // ---- Fasting section (TASK-47) ----

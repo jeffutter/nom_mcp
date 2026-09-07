@@ -904,6 +904,39 @@ mod tests {
 
     #[serial_test::serial]
     #[tokio::test]
+    async fn test_weekly_summary_resource_includes_meal_type_breakdown() {
+        let db = TempDb::new().await;
+        let clock = Clock { tz: chrono_tz::UTC };
+        let today = Clock::format_date(clock.today());
+
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        conn.execute(
+            "INSERT INTO meals (logged_at, logged_date, total_calories, meal_type) VALUES (?, ?, ?, ?)",
+            (format!("{today}T08:00:00Z"), today, 350.0, "breakfast"),
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        let handler = McpHandler::new(Arc::new(OperationRegistry::new(make_clock())), clock)
+            .with_db_path(db.path.clone());
+        let result = handler.dispatch_read_resource("nom://weekly-summary").await;
+        assert!(result.is_ok());
+        let ReadResourceResult { contents, .. } = result.unwrap();
+        let ResourceContents::TextResourceContents { text, .. } = &contents[0] else {
+            panic!("expected text contents")
+        };
+
+        let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        let buckets = value["nutrients"]["daily_totals"][0]["by_meal_type"]
+            .as_array()
+            .expect("resource exposes the per-meal-type breakdown");
+        assert_eq!(buckets[0]["meal_type"].as_str(), Some("breakfast"));
+        assert_eq!(buckets[0]["calories"].as_f64().unwrap(), 350.0);
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
     async fn test_dispatch_read_resource_unknown_uri_errors() {
         let clock = Clock { tz: chrono_tz::UTC };
         let handler = McpHandler::new(Arc::new(OperationRegistry::new(make_clock())), clock);
