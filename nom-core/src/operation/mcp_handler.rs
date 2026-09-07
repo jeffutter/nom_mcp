@@ -1332,6 +1332,57 @@ mod tests {
         );
     }
 
+    /// Whether a bucket counts as legacy/unrecognized is decided once, by
+    /// `isLegacyMealBucket`, and used everywhere that decision matters: the
+    /// ribbon fill class, the tooltip label, and the legend's dedup key. Guards
+    /// against the three re-growing their own ad-hoc legacy checks (one
+    /// definition plus three call sites).
+    #[test]
+    fn meal_ribbon_legacy_bucket_check_is_not_duplicated() {
+        assert!(
+            WEEKLY_PROGRESS_WIDGET_HTML
+                .matches("isLegacyMealBucket(")
+                .count()
+                >= 4,
+            "mealSegClass, mealBucketLabel and mealLegendHtml's dedup key must all \
+             defer to one isLegacyMealBucket predicate instead of duplicating the check"
+        );
+    }
+
+    /// Contents of a `var NAME = [...]` array of double-quoted strings in the
+    /// widget's script, in source order.
+    fn js_string_array_constant(source: &str, name: &str) -> Vec<String> {
+        let marker = format!("var {name} = [");
+        let at = source
+            .find(&marker)
+            .unwrap_or_else(|| panic!("{name} constant present"))
+            + marker.len();
+        let rest = &source[at..];
+        let end = rest.find(']').expect("terminated array literal");
+        rest[..end]
+            .split(',')
+            .map(|s| s.trim().trim_matches('"').to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+
+    /// `MEAL_TYPE_ORDER` is a client-side mirror of `meal_type::bucket_rank`'s
+    /// server-side ranking (breakfast=0, lunch=1, dinner=2, else last) — the
+    /// widget's JS cannot call into Rust, so this is the one place the mirror
+    /// can be pinned against the ranking it must agree with. If the two ever
+    /// diverge the ribbon and legend would silently order meal types
+    /// differently from the API that feeds them.
+    #[test]
+    fn meal_ribbon_legend_order_matches_bucket_rank() {
+        let order = js_string_array_constant(WEEKLY_PROGRESS_WIDGET_HTML, "MEAL_TYPE_ORDER");
+        assert_eq!(
+            order,
+            vec!["breakfast", "lunch", "dinner"],
+            "MEAL_TYPE_ORDER must match meal_type::bucket_rank's ranking \
+             (breakfast=0, lunch=1, dinner=2, else last)"
+        );
+    }
+
     /// Numeric value of an XML-style `name="<number>"` attribute.
     fn xml_number_attribute(text: &str, name: &str) -> f64 {
         let marker = format!("{name}=\"");

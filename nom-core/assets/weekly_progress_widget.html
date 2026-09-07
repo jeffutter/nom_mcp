@@ -356,6 +356,16 @@
   // null bucket included) goes last.
   var MEAL_TYPE_ORDER = ["breakfast", "lunch", "dinner"];
 
+  // Single source of truth for what counts as the legacy/unrecognized bucket:
+  // mealSegClass, mealBucketLabel and mealLegendHtml's dedup key all defer to
+  // this so they can't silently disagree. Folds any future out-of-enum
+  // meal_type string into the legacy bucket too -- the API only ever emits
+  // breakfast/lunch/dinner/null today so that path is currently unreachable,
+  // but mealSegClass and mealBucketLabel should agree if it ever isn't.
+  function isLegacyMealBucket(mealType) {
+    return typeof mealType !== "string" || !mealType || !(mealType in MEAL_SEG_CLASS);
+  }
+
   // Narrowest segment worth drawing, in user units. Every segment loses 0.75
   // units to the seam stroke and the 320-unit viewBox renders about 0.94 CSS px
   // per unit at the shipped width, so this floor still leaves roughly 2.5 CSS px
@@ -366,14 +376,14 @@
   var MIN_SEG_WIDTH = 3.5;
 
   function mealSegClass(mealType) {
-    return MEAL_SEG_CLASS[mealType] || "seg-none";
+    return isLegacyMealBucket(mealType) ? "seg-none" : MEAL_SEG_CLASS[mealType];
   }
 
   // Display name for a bucket, shared by the tooltip and the legend so the two
   // can never disagree about what a swatch means. The legacy / unrecognized
   // bucket has no name to show, so it is labelled by its absence.
   function mealBucketLabel(mealType) {
-    if (typeof mealType !== "string" || !mealType) return "(none)";
+    if (isLegacyMealBucket(mealType)) return "(none)";
     return mealType.charAt(0).toUpperCase() + mealType.slice(1);
   }
 
@@ -501,9 +511,10 @@
     var seen = {};
     (data.nutrients.daily_totals || []).forEach(function (day) {
       mealBuckets(day).forEach(function (b) {
-        // Empty string stands in for the legacy null bucket, matching the
-        // unrecognised-type fallback in mealSegClass.
-        var key = typeof b.meal_type === "string" ? b.meal_type : "";
+        // Empty string stands in for the legacy null bucket; isLegacyMealBucket
+        // is the shared predicate mealSegClass and mealBucketLabel also use, so
+        // the three can't drift apart on what counts as legacy.
+        var key = isLegacyMealBucket(b.meal_type) ? "" : b.meal_type;
         if (seen[key]) return;
         seen[key] = true;
         entries.push({ type: b.meal_type, rank: mealTypeRank(b.meal_type), seen: entries.length });

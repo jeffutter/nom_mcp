@@ -13,8 +13,12 @@
 //! query that aggregates Meals by `(logged_date, meal_type)`. Summing meals
 //! per day is deliberately not duplicated per consumer — `weekly` and `goal`
 //! both read through [`fetch_days_by_meal_type`] so the SQL, the grouping and
-//! the bucket ordering exist in exactly one place (see TASK-31 for what
-//! duplicated aggregation SQL cost once already).
+//! the bucket ordering exist in exactly one place server-side (see TASK-31 for
+//! what duplicated aggregation SQL cost once already). The one deliberate
+//! exception is client-side: `nom-core/assets/weekly_progress_widget.html`'s
+//! `MEAL_TYPE_ORDER` mirrors `bucket_rank`'s ranking in JS because the widget
+//! cannot call into Rust; `meal_ribbon_legend_order_matches_bucket_rank` in
+//! `operation::mcp_handler`'s test suite is what keeps that mirror honest.
 
 use std::ops::RangeInclusive;
 

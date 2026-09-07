@@ -3,9 +3,10 @@ id: TASK-68
 title: >-
   Fix: meal-type bucket ordering doc claims one source of truth but the
   weekly-progress widget carries an untested second copy
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-09-07 20:36'
+updated_date: '2026-09-07 23:25'
 labels:
   - review-followup
 dependencies:
@@ -22,10 +23,10 @@ Found while reviewing TASK-64 (nom-core/assets/weekly_progress_widget.html:357, 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 nom-core/src/meal_type.rs's module doc comment (lines 12-17) is updated to name weekly_progress_widget.html's MEAL_TYPE_ORDER as a deliberate second copy of the ordering (JS cannot call bucket_rank), rather than claiming the ordering lives in exactly one place
-- [ ] #2 A new std-only test in nom-core/src/operation/mcp_handler.rs parses MEAL_TYPE_ORDER out of WEEKLY_PROGRESS_WIDGET_HTML and asserts it equals ["breakfast", "lunch", "dinner"] in that order, matching meal_type::bucket_rank's real ranking (0,1,2, else last)
-- [ ] #3 The new test is written red first against a deliberately reordered MEAL_TYPE_ORDER and the failure text is quoted in the ticket's implementation notes
-- [ ] #4 nix develop -c cargo nextest run --all-features --workspace, cargo clippy --all-targets --all-features --workspace -- -D warnings and cargo fmt --all --check all pass
+- [x] #1 nom-core/src/meal_type.rs's module doc comment (lines 12-17) is updated to name weekly_progress_widget.html's MEAL_TYPE_ORDER as a deliberate second copy of the ordering (JS cannot call bucket_rank), rather than claiming the ordering lives in exactly one place
+- [x] #2 A new std-only test in nom-core/src/operation/mcp_handler.rs parses MEAL_TYPE_ORDER out of WEEKLY_PROGRESS_WIDGET_HTML and asserts it equals ["breakfast", "lunch", "dinner"] in that order, matching meal_type::bucket_rank's real ranking (0,1,2, else last)
+- [x] #3 The new test is written red first against a deliberately reordered MEAL_TYPE_ORDER and the failure text is quoted in the ticket's implementation notes
+- [x] #4 nix develop -c cargo nextest run --all-features --workspace, cargo clippy --all-targets --all-features --workspace -- -D warnings and cargo fmt --all --check all pass
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -41,3 +42,24 @@ SETUP (read first): Plain Rust workspace (nom-core / nom-mcp crates) with widget
 
 4. Run: nix develop -c cargo nextest run --all-features --workspace, cargo clippy --all-targets --all-features --workspace -- -D warnings, cargo fmt --all --check.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Red-first evidence, temporarily swapping MEAL_TYPE_ORDER to ["breakfast", "dinner", "lunch"] in nom-core/assets/weekly_progress_widget.html and running the new test alone:
+
+```
+thread 'operation::mcp_handler::tests::meal_ribbon_legend_order_matches_bucket_rank' panicked at nom-core/src/operation/mcp_handler.rs:1378:9:
+assertion `left == right` failed: MEAL_TYPE_ORDER must match meal_type::bucket_rank's ranking (breakfast=0, lunch=1, dinner=2, else last)
+  left: ["breakfast", "dinner", "lunch"]
+ right: ["breakfast", "lunch", "dinner"]
+```
+
+Reverted the swap immediately after capturing this. Implementation: meal_type.rs's module doc comment (lines 12-17) now names weekly_progress_widget.html's MEAL_TYPE_ORDER as the one deliberate client-side mirror of bucket_rank, and points at the new test as what keeps it honest. Added js_string_array_constant (mirrors the existing js_number_constant pattern) and meal_ribbon_legend_order_matches_bucket_rank in nom-core/src/operation/mcp_handler.rs, asserting the parsed MEAL_TYPE_ORDER equals exactly ["breakfast", "lunch", "dinner"]. Full suite green: nextest 385/385, doctests, clippy -D warnings, fmt --check, rustdoc -D warnings.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Closed the untested cross-boundary invariant between meal_type::bucket_rank (server-side ranking) and the widget's MEAL_TYPE_ORDER (client-side mirror): the module doc now names the mirror explicitly instead of claiming a single source of truth, and a new red-first-verified test pins the JS array against the Rust ranking it must agree with.
+<!-- SECTION:FINAL_SUMMARY:END -->
