@@ -6,6 +6,7 @@ title: >-
 status: Needs Plan
 assignee: []
 created_date: '2026-09-07 17:52'
+updated_date: '2026-09-07 19:27'
 labels: []
 dependencies:
   - TASK-65.2.1
@@ -49,3 +50,12 @@ Light-scheme `lunch`/`dinner` is the real production collapse — 5.05 under pro
 - [ ] #4 Light-scheme --meal-lunch is retuned so every condition clears its floor with margin, the CSS ramp comment is updated in the same commit, and meal_ribbon_colours_meet_non_text_contrast still passes.
 - [ ] #5 Screenshot verification of the retuned light scheme (normal and deuteranopia-emulated, <=4 images per subagent prompt) is recorded in the notes, and the full CI mirror is green.
 <!-- AC:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-09-07 19:27
+---
+Planning correction from TASK-65.2.1 research (verified against colorspacious cvd.py, coloraide filters/cvd.py, colour-science tests/test_delta_e.py, and a local re-run of /tmp/t652_verify.py). Three defects in this plan that would have produced red-but-correct code: (1) the Machado severity-1.0 deutan and tritan matrices are mis-transcribed - correct digits are deutan [[0.367322,0.860646,-0.227968],[0.280085,0.672501,0.047413],[-0.011820,0.042940,0.968881]] and tritan [[1.255528,-0.076749,-0.178779],[-0.078411,0.930809,0.147602],[0.004733,0.691367,0.303900]], matching colorspacious and coloraide digit-for-digit; protan was right. (2) There is no feColorMatrix / filter / dichromacy constant anywhere under nom-core/assets (weight_trend_widget.html is 371 lines of render code); the Blink constants remembered at "lines 243-248" live only in the throwaway spike harness /tmp/t65-spike/harness.html:91, so any parity assert must pin them as test data rather than cite shipped markup. (3) The Sharma CIEDE2000 table carried here is corrupt and does not reproduce (worst error 1.75): rows 1-6 use b* = -82.7485, not -82.7775, and four pairs are mis-partnered; the verified 33-row set with expected values is pinned in TASK-65.2.1's implementation plan, where two independent implementations reproduce every published value to 4.9e-5. Everything else measured here did reproduce exactly with the corrected matrices - light-scheme lunch/dinner protanopia 5.05 worst pair, dark worst 15.61, Okabe-Ito floors protan 6.61 / deutan 6.04 / tritan 5.66, gamma-vs-linear dE76 11.40 vs 24.99 - so the conclusions and the one-hex fix stand unchanged.
+---
+<!-- COMMENTS:END -->
