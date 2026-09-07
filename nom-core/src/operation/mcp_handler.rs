@@ -1180,6 +1180,9 @@ mod tests {
         // Size reporting is load-bearing for hosts that size the iframe from
         // the widget's own reports (TASK-56); guard against it being lost.
         assert!(text.contains("ui/notifications/size-changed"));
+        // The per-day composition ribbon binds to by_meal_type; guard against
+        // that binding being dropped (TASK-62.5).
+        assert!(text.contains("by_meal_type"));
     }
 
     /// Same as `test_dispatch_read_resource_goal_progress_widget` above, but

@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@ralph'
 created_date: '2026-09-07 01:30'
-updated_date: '2026-09-07 04:41'
+updated_date: '2026-09-07 04:45'
 labels:
   - planned
 dependencies: []
@@ -335,6 +335,8 @@ Implemented per plan, client-side only. food_added_widget.html: headerHtml() pre
 Visual pass (throwaway harness at /tmp/widget-harness, dev DB /tmp/nom-dev, both removed after; nothing committed): seeded with seed_data + 3 custom foods created over REST so breakfast/lunch/dinner all land today; weekly payload pulled over streamable HTTP /mcp, food-added over POST /api/log_meal, plus an MCP log_meal call whose result key-set matched REST exactly. Measured @320px viewport via iframe body.offsetHeight (the widget's own size-changed reports the deliberately oversized 400px iframe, so it is not a usable metric here): weekly 222px HEAD baseline -> 230px new in BOTH light and dark (delta +8 = the planned +7.5 rounded at both scales; ceiling <=230 met exactly, absolute px differs from the 217/224 quoted in TASK-56 notes because of harness scale). food-added 137px identical before/after in both themes (baseline was 137, not the 139 quoted in TASK-58.2 — same harness for both, delta 0). Ribbon geometry checked in DOM: every day's segment widths sum to 26.057 == bar width exactly, firstX == bar x; days absent from daily_totals draw nothing.
 
 Three screenshot review passes by fresh subagents, <=4 images each (never attached to this session). Pass 1 flagged intra-violet seams reading as one block and pale violet fusing with the dark-theme blue bar; added the hairline seams and darkened the light palest step. Pass 2 said ship but wanted wider lightness steps; widened the ramp (light #3b0764/#7c3aed/#c4b5fd, dark #7c3aed/#a78bfa/#ede9fe) and made the legacy gray more clearly neutral (#8f8f99 light / #71717a dark). Pass 3: boundaries 1-2/3, no meal-type-vs-goal-status confusion, gray reads neutral, no regressions vs baseline shots, verdict ship. Known accepted limits: the 6-calorie synthetic sliver clamps to ~1.4px and stays hard to see by design (tooltip carries it); unrecognized raw strings keep server arrival order among equal-rank legacy buckets rather than being re-sorted client-side.
+
+Fixup applied post-review: AC #8 required extending both widget resource tests (meal_type in food-added, by_meal_type in weekly) but only the food-added assertion landed in the commit — test_dispatch_read_resource_weekly_progress_widget had no by_meal_type guard despite the AC being checked off and the Final Summary claiming both were pinned. Added `assert!(text.contains("by_meal_type"))` to that test in nom-core/src/operation/mcp_handler.rs. Verified: both widget resource tests pass, fmt/clippy clean on nom-core.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
