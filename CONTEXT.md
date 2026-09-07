@@ -5,8 +5,12 @@ A single-user Rust MCP server for tracking food, nutrition, and body weight — 
 ## Language
 
 **Meal**:
-Any logged eating occasion — a full dinner, a snack, a single protein bar. Composed of zero or more Portions plus an optional raw-macro adjustment for anything that doesn't map to a catalog Food; total macros are the sum of both.
+Any logged eating occasion — a full dinner, a snack, a single protein bar. Carries exactly one Meal Type. Composed of zero or more Portions plus an optional raw-macro adjustment for anything that doesn't map to a catalog Food; total macros are the sum of both.
 _Avoid_: Log Entry, Food Log
+
+**Meal Type**:
+Which of breakfast, lunch, or dinner a Meal belongs to. Stored on the Meal when it is logged, never inferred again at query time. Default comes from the Meal's logged instant read in the Clock's timezone — breakfast 05:00–10:59, lunch 11:00–15:59, dinner 16:00–04:59 — so the windows wrap midnight and a post-midnight Meal extends the previous evening's dinner even though its logged_date belongs to the new calendar day. An explicit argument always wins; correcting a Meal's logged time re-derives the label unless the caller supplied one with that edit. There is deliberately no Snack value: any eating occasion takes whichever window its clock time lands in, so a 15:30 protein bar is a lunch — the windows are a convenience label, not ground truth (no accepted time-of-day definition exists, and a fourth SNACK/UNKNOWN bucket would need its own write-time decision). Meals logged before the attribute existed store nothing and report `null`; nothing is backfilled, since deriving one now would claim a choice the user never made. Read back per Meal (`meal_type`) and per summary (`meals_by_type` on `get_goal_progress`, `by_meal_type` inside each day of the Weekly Summary), where legacy `null` sorts last.
+_Avoid_: Meal Slot, Occasion, Category, Snack (no such value), Type (unqualified — already reserved against Direction)
 
 **Food**:
 A nutrition reference — a name plus macros per serving. One entity type with a `source` discriminator: OpenFoodFacts (barcode), USDA FDC (whole/raw foods), or Custom (user-defined, for dishes uncatalogued in either source). Custom Foods are not a separate type — they share the same shape and are reused the same way once defined.
@@ -33,7 +37,7 @@ An automatically derived intermittent-fasting measure: the time from a day's las
 _Avoid_: Fast Timer, IF Streak
 
 **Weekly Summary**:
-A rolling 7-day nutrition and weight snapshot: daily-average nutrient consumption vs Goal targets (plus a per-day breakdown) alongside a weight trend (start/end/delta within the window, or the latest known Weight Entry if none was logged this week). Computed by the shared `fetch_weekly_summary()` and surfaced two ways: the read-only MCP Resource `nom://weekly-summary` (no CLI/HTTP equivalent, since it has no Operation shape), and the `get_weekly_progress` MCP tool — the latter exists solely so the weekly-progress widget has a `call_tool` result to bind to, since MCP Apps widgets can't get live data from a resource read.
+A rolling 7-day nutrition and weight snapshot: daily-average nutrient consumption vs Goal targets (plus a per-day breakdown, each day split by Meal Type) alongside a weight trend (start/end/delta within the window, or the latest known Weight Entry if none was logged this week). Computed by the shared `fetch_weekly_summary()` and surfaced two ways: the read-only MCP Resource `nom://weekly-summary` (no CLI/HTTP equivalent, since it has no Operation shape), and the `get_weekly_progress` MCP tool — the latter exists solely so the weekly-progress widget has a `call_tool` result to bind to, since MCP Apps widgets can't get live data from a resource read.
 _Avoid_: Weekly Report, Dashboard
 
 **Weight Trend**:

@@ -1,10 +1,11 @@
 ---
 id: TASK-62.4
 title: Document meal_type in README and add the Meal Type term to CONTEXT.md
-status: Dev Ready
-assignee: []
+status: Done
+assignee:
+  - '@ralph'
 created_date: '2026-09-07 01:30'
-updated_date: '2026-09-07 01:30'
+updated_date: '2026-09-07 02:51'
 labels:
   - task
   - planned
@@ -33,10 +34,10 @@ What has to be written down, beyond "there is a new argument":
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 CONTEXT.md gains a Meal Type entry in house format covering the default windows, the explicit override, the re-derivation on time edits, the deliberate absence of a snack value, and the legacy null case
-- [ ] #2 Meal entry mentions that a Meal carries a Meal Type; Direction's _Avoid_ list is not contradicted (term stays qualified as "Meal Type")
-- [ ] #3 README documents the optional argument for log_meal and update_meal with an example, plus the by_meal_type breakdown in the weekly summary section and meal_type in the REST/remote-CLI examples
-- [ ] #4 Every documented field name and error shape was verified against real command output, not assumed
+- [x] #1 CONTEXT.md gains a Meal Type entry in house format covering the default windows, the explicit override, the re-derivation on time edits, the deliberate absence of a snack value, and the legacy null case
+- [x] #2 Meal entry mentions that a Meal carries a Meal Type; Direction's _Avoid_ list is not contradicted (term stays qualified as "Meal Type")
+- [x] #3 README documents the optional argument for log_meal and update_meal with an example, plus the by_meal_type breakdown in the weekly summary section and meal_type in the REST/remote-CLI examples
+- [x] #4 Every documented field name and error shape was verified against real command output, not assumed
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -80,3 +81,15 @@ Quote real output shapes in the docs; do not invent field names.
 
 A reader can learn the argument, the default windows, the no-snack decision, and the legacy-null behaviour from README alone, and the glossary term matches what shipped.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+CONTEXT.md: new **Meal Type** entry directly after **Meal**, in house format (bold term, indented prose, _Avoid_ line), covering write-time storage, the three windows read in the Clock's timezone (midnight-wrapping), explicit override, re-derivation when logged_at is edited, the deliberate no-snack decision, and the legacy null case; Meal's first sentence now says a Meal carries exactly one Meal Type; Weekly Summary entry notes the per-day split; _Avoid_ keeps the term qualified (bare "Type" stays Direction's). README: operations table rows for log_meal/update_meal/get_meals_by_date_range/get_goal_progress, a new '### Meal type' section (defaults, override + real Validation output, re-derivation, no snack, legacy null, and a real weekly-summary daily_totals object showing by_meal_type), REST section shows meal_type as a body key plus the real 400 error JSON, remote-CLI block adds a meal_type=breakfast example, domain-model summary points at the new section.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Prose only. Every documented name, value list, and error shape was taken from live commands against a seeded throwaway DB (NOM_MCP_DB_PATH=/tmp/nom62/db.sqlite): local CLI log_meal --meal_type lunch and the invalid-value stderr/exit-4 pair, POST /api/log_meal with meal_type plus its HTTP 400 Validation JSON, nom-mcp-remote ... meal_type=breakfast and its invalid case, get_meals_by_date_range showing meal_type per meal with null for a raw-SQL legacy row, get_goal_progress meals_by_type, update_meal re-deriving the label from a corrected logged_at, and the nom://weekly-summary resource JSON whose day entry is quoted verbatim (floats aside).
+<!-- SECTION:FINAL_SUMMARY:END -->

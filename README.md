@@ -6,7 +6,7 @@ A single-user Rust nutrition tracker for logging meals, body weight, and nutriti
 
 ## Domain model
 
-The full glossary lives in [CONTEXT.md](CONTEXT.md). In short: a **Meal** is composed of **Portions**, each a quantity of a catalog **Food** (OpenFoodFacts barcode lookup, USDA FDC whole foods, or a user-defined Custom Food) — nutrients are snapshotted onto the Portion at log time, so later catalog changes never retroactively alter a logged Meal. **Weight Entries** are tracked separately. A **Goal** sets daily nutrient/weight targets, each with an explicit **Direction** (target, minimum, or maximum); `get_goal_progress` and the `nom://weekly-summary` MCP resource compare logged data against the active goal.
+The full glossary lives in [CONTEXT.md](CONTEXT.md). In short: a **Meal** is composed of **Portions**, each a quantity of a catalog **Food** (OpenFoodFacts barcode lookup, USDA FDC whole foods, or a user-defined Custom Food) — nutrients are snapshotted onto the Portion at log time, so later catalog changes never retroactively alter a logged Meal. Each Meal also carries a **Meal Type** (`breakfast`, `lunch`, or `dinner`), defaulted from the logged time and overridable — see [Meal type](#meal-type). **Weight Entries** are tracked separately. A **Goal** sets daily nutrient/weight targets, each with an explicit **Direction** (target, minimum, or maximum); `get_goal_progress` and the `nom://weekly-summary` MCP resource compare logged data against the active goal.
 
 ## Installation
 
@@ -49,11 +49,11 @@ Arguments are `--key value` long flags (`--key=value` also works); values are au
 |---|---|
 | `search_food --query <text or barcode>` | Search Custom Foods + USDA FDC (free text) or OpenFoodFacts (all-digit barcode). Every result is upserted into the local cache, so its `food_id` is immediately usable. |
 | `create_custom_food --name <text> --serving_size <json> --nutrients <json>` | Define a Custom Food from per-serving nutrients (`serving_size.unit` must be a gram-equivalent unit). |
-| `log_meal --portions <json>` | Log a meal from one or more `{food_id, quantity, quantity_mode}` portions, plus an optional raw-macro `adjustment` and `logged_at` override. Nutrients are snapshotted at log time. |
-| `update_meal --meal_id <id> ...` | Partial patch to an existing meal (`portions`, if given, fully replaces the array; `adjustment`/`logged_at` patch independently). |
+| `log_meal --portions <json> [--meal_type <breakfast\|lunch\|dinner>]` | Log a meal from one or more `{food_id, quantity, quantity_mode}` portions, plus an optional raw-macro `adjustment` and `logged_at` override. Nutrients are snapshotted at log time. Omitting `--meal_type` derives it from the logged time (see [Meal type](#meal-type)). |
+| `update_meal --meal_id <id> ...` | Partial patch to an existing meal (`portions`, if given, fully replaces the array; `adjustment`/`logged_at`/`meal_type` patch independently). Patching `logged_at` alone re-derives the meal type from the new time. |
 | `delete_meal --meal_id <id>` | Hard delete (cascades to its portions). |
 | `search_meals --query <text>` | Keyword search over logged meals' food names, most-recent-first; optional date range filter. |
-| `get_meals_by_date_range --start_date <date> --end_date <date>` | Meals logged within an inclusive date range. |
+| `get_meals_by_date_range --start_date <date> --end_date <date>` | Meals logged within an inclusive date range, each with its `meal_type`. |
 | `log_weight --value <number>` | Log a body-weight entry. Value is stored as-is (no unit enforcement); optional `logged_at` allows backdating. |
 | `update_weight_entry --entry_id <id> ...` | Partial patch to a weight entry's value and/or timestamp. |
 | `delete_weight_entry --entry_id <id>` | Hard delete. |
@@ -61,7 +61,7 @@ Arguments are `--key value` long flags (`--key=value` also works); values are au
 | `get_weight_by_date --date <date>` | Weight entries on a specific date. |
 | `get_weight_by_date_range --start_date <date> --end_date <date>` | Weight entries within an inclusive date range. |
 | `set_nutrition_goals --calories <n> --calories_direction <target\|minimum\|maximum> ...` | Set or update nutrition/weight goals. Partial patch: only provided nutrients change; others carry forward from the current active goal. `*_direction` is required the first time a nutrient is set. Supports `calories`, `protein_g`, `carbs_g`, `fat_g`, `fiber_g` (each with a `*_direction`), and `target_weight` (no direction). |
-| `get_goal_progress [--date <date>]` | Per-nutrient consumed-vs-target and weight-vs-target comparison for a date (defaults to today), plus the day's Fasting Window (`fasting_hours`, derived from the gap between that day's last Meal and the next Meal). |
+| `get_goal_progress [--date <date>]` | Per-nutrient consumed-vs-target and weight-vs-target comparison for a date (defaults to today), plus the day's Fasting Window (`fasting_hours`, derived from the gap between that day's last Meal and the next Meal) and the day's totals split by meal type (`meals_by_type`). |
 
 Two additional operations, `get_widget_display` and `set_widget_display`, exist for a future widget UI and are exposed on the **MCP surface only** (not local CLI or REST) — see [AGENTS.md](AGENTS.md#one-operation-four-surfaces).
 
@@ -69,7 +69,7 @@ Example:
 
 ```sh
 nom-mcp search_food --query almonds
-nom-mcp log_meal --portions '[{"food_id":1,"quantity":150,"quantity_mode":"grams"}]'
+nom-mcp log_meal --portions '[{"food_id":1,"quantity":150,"quantity_mode":"grams"}]' --meal_type lunch
 nom-mcp create_custom_food --name "Protein Shake" \
   --serving_size '{"quantity":1,"unit":"grams"}' \
   --nutrients '{"calories":150,"protein_g":30,"carbs_g":5,"fat_g":2,"fiber_g":0}'
@@ -80,6 +80,44 @@ nom-mcp get_goal_progress
 ```
 
 Errors print a message to stderr and exit with a category-specific code (`3` not found, `4` validation, `5` conflict, `6` external API failure, `7` storage failure — see [AGENTS.md](AGENTS.md#unified-error-taxonomy)).
+
+### Meal type
+
+Every logged Meal carries a `meal_type`: `breakfast`, `lunch`, or `dinner`. It is stored when the Meal is written and never recomputed at read time.
+
+- **Default**: derived from the logged instant in the configured timezone — breakfast `05:00–10:59`, lunch `11:00–15:59`, dinner `16:00–04:59`. The windows wrap midnight, so a 01:00 log is labelled dinner while its `logged_date` still belongs to the new calendar day.
+- **Override**: pass `meal_type` (`--meal_type lunch`, `"meal_type": "lunch"` in a REST body, `meal_type=lunch` for the remote CLI). An invalid value fails on every surface as a Validation error naming the field, exit code `4`:
+
+  ```console
+  $ nom-mcp log_meal --portions '[{"food_id":1,"quantity":100,"quantity_mode":"grams"}]' --meal_type snack
+  validation error on field 'meal_type': must be one of 'breakfast', 'lunch', 'dinner', got 'snack'
+  $
+  ```
+
+- **Editing the time re-derives the label**: `update_meal --logged_at ...` recomputes the meal type from the new instant unless the same call also passes `meal_type` explicitly.
+- **No `snack` value exists.** Whichever window the clock time falls in wins, so a 15:30 protein bar logs as lunch.
+- **Legacy rows**: meals logged before the attribute existed report `"meal_type": null`. Nothing is backfilled.
+
+Summaries group by it: `get_goal_progress` returns `meals_by_type` for the queried date, and each `daily_totals` entry of the weekly summary carries a `by_meal_type` array beside its whole-day numbers. Both list breakfast, lunch, dinner in that order with any legacy `null` bucket last, and both keep reporting whole-day totals unchanged:
+
+```json
+{
+  "date": "2026-09-06",
+  "calories": 2609.2,
+  "protein_g": 219.61,
+  "carbs_g": 201.6,
+  "fat_g": 95.86,
+  "fiber_g": 55.08,
+  "by_meal_type": [
+    { "meal_type": "breakfast", "calories": 67.2, "protein_g": 1.56, "carbs_g": 14.4, "fat_g": 0.18, "fiber_g": 1.08 },
+    { "meal_type": "lunch", "calories": 780.0, "protein_g": 78.8, "carbs_g": 80.0, "fat_g": 15.0, "fiber_g": 20.0 },
+    { "meal_type": "dinner", "calories": 1639.0, "protein_g": 135.25, "carbs_g": 102.2, "fat_g": 74.68, "fiber_g": 27.0 },
+    { "meal_type": null, "calories": 123.0, "protein_g": 4.0, "carbs_g": 5.0, "fat_g": 6.0, "fiber_g": 7.0 }
+  ]
+}
+```
+
+(`get_goal_progress`'s `meals_by_type` uses the same bucket objects.)
 
 ## Usage: `nom-mcp serve` (MCP + HTTP)
 
@@ -113,11 +151,17 @@ For a client that speaks streamable-HTTP MCP, start `nom-mcp serve http --port 8
 
 ### MCP resource: weekly summary
 
-Besides its tools, the MCP surface exposes one resource, `nom://weekly-summary`, which returns a rolling 7-day nutrition and weight overview (daily totals, averages vs. the active goal, weight trend, and average Fasting Window) as JSON.
+Besides its tools, the MCP surface exposes one resource, `nom://weekly-summary`, which returns a rolling 7-day nutrition and weight overview (daily totals with each day split by meal type, averages vs. the active goal, weight trend, and average Fasting Window) as JSON.
 
 ### REST API
 
 `serve http` also exposes every CLI-surfaced operation as `POST /api/{operation}`, with a JSON object whose keys are the operation's argument names (e.g. `POST /api/log_weight` with body `{"value": 181.4}`) and the same JSON response/error shape as the CLI. This is what `nom-mcp-remote` talks to.
+
+Optional arguments work the same way, e.g. `POST /api/log_meal` with `{"portions": [{"food_id": 1, "quantity": 100.0, "quantity_mode": "grams"}], "meal_type": "dinner"}`. An invalid value gets HTTP 400 with the standard error shape naming the field:
+
+```json
+{ "category": "Validation", "field": "meal_type", "reason": "must be one of 'breakfast', 'lunch', 'dinner', got 'snack'" }
+```
 
 ## Usage: `nom-mcp-remote`
 
@@ -127,6 +171,7 @@ A thin HTTP client exposing the same operations as the local CLI (`nom-mcp-remot
 nom-mcp-remote search_food query=almonds
 nom-mcp-remote log_weight value=181.4
 nom-mcp-remote log_meal portions='[{"food_id":1,"quantity":250,"quantity_mode":"grams"}]'
+nom-mcp-remote log_meal portions='[{"food_id":1,"quantity":250,"quantity_mode":"grams"}]' meal_type=breakfast
 ```
 
 (single-quote the JSON so your shell passes the brackets and quotes through verbatim.)
