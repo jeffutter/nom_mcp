@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@ralph'
 created_date: '2026-09-07 01:30'
-updated_date: '2026-09-07 04:45'
+updated_date: '2026-09-07 04:50'
 labels:
   - planned
 dependencies: []
@@ -337,6 +337,8 @@ Visual pass (throwaway harness at /tmp/widget-harness, dev DB /tmp/nom-dev, both
 Three screenshot review passes by fresh subagents, <=4 images each (never attached to this session). Pass 1 flagged intra-violet seams reading as one block and pale violet fusing with the dark-theme blue bar; added the hairline seams and darkened the light palest step. Pass 2 said ship but wanted wider lightness steps; widened the ramp (light #3b0764/#7c3aed/#c4b5fd, dark #7c3aed/#a78bfa/#ede9fe) and made the legacy gray more clearly neutral (#8f8f99 light / #71717a dark). Pass 3: boundaries 1-2/3, no meal-type-vs-goal-status confusion, gray reads neutral, no regressions vs baseline shots, verdict ship. Known accepted limits: the 6-calorie synthetic sliver clamps to ~1.4px and stays hard to see by design (tooltip carries it); unrecognized raw strings keep server arrival order among equal-rank legacy buckets rather than being re-sorted client-side.
 
 Fixup applied post-review: AC #8 required extending both widget resource tests (meal_type in food-added, by_meal_type in weekly) but only the food-added assertion landed in the commit — test_dispatch_read_resource_weekly_progress_widget had no by_meal_type guard despite the AC being checked off and the Final Summary claiming both were pinned. Added `assert!(text.contains("by_meal_type"))` to that test in nom-core/src/operation/mcp_handler.rs. Verified: both widget resource tests pass, fmt/clippy clean on nom-core.
+
+Fixup applied post-review: mealRibbon()'s minimum-sliver clamping in nom-core/assets/weekly_progress_widget.html was dead code — the fixedTotal accumulator wrongly summed minSliver for fixed buckets AND the raw width for unfixed buckets, so fixedTotal always exceeded barW whenever any bucket needed clamping (remaining = barW - fixedTotal went negative, and the `remaining > 0` guard skipped the redistribution branch every time). Real-world effect: any day with an uneven meal split (e.g. a small breakfast next to a big lunch/dinner) rendered that segment at its raw sub-pixel width instead of the AC #3-required 1.5-unit minimum sliver, defeating the whole point of the clamp. Fixed by removing the erroneous `fixedTotal += w` in the unfixed branch so fixedTotal correctly totals only the fixed buckets' minSliver contributions. Verified algebraically and with a Node reproduction of the exact algorithm (widths now clamp to 1.5 and still sum exactly to barW); nix develop -c cargo nextest run -p nom-core: 361/361 pass (no Rust test covers this JS logic directly).
 <!-- SECTION:NOTES:END -->
 
 ## Comments
