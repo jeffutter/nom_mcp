@@ -99,10 +99,14 @@
      fill meets a page-coloured line that itself clears 3:1 against both
      neighbours (W3C technique G209). Thinning or removing it breaks boundary
      legibility whatever the fills are. */
-  .meal-seg.seg-breakfast { fill: var(--meal-breakfast); }
-  .meal-seg.seg-lunch     { fill: var(--meal-lunch); }
-  .meal-seg.seg-dinner    { fill: var(--meal-dinner); }
-  .meal-seg.seg-none      { fill: var(--meal-none); }
+  /* One rule per hue serves both surfaces that name a meal type: the ribbon
+     segments (fill, ignored by HTML) and the legend swatches (background,
+     ignored by SVG). Keeping them together is what stops the key drifting away
+     from what it keys. */
+  .seg-breakfast { fill: var(--meal-breakfast); background: var(--meal-breakfast); }
+  .seg-lunch     { fill: var(--meal-lunch);     background: var(--meal-lunch); }
+  .seg-dinner    { fill: var(--meal-dinner);    background: var(--meal-dinner); }
+  .seg-none      { fill: var(--meal-none);      background: var(--meal-none); }
 
   .meal-seg {
     stroke: var(--bg);
@@ -160,6 +164,36 @@
   .weight-status.status-under { color: var(--under); }
   .weight-status.status-met { color: var(--met); }
   .weight-status.status-over { color: var(--over); }
+
+  /* Colour key for the composition ribbon. Segments carry their meaning in hue
+     alone, and the tooltip holding the same information is invisible to touch
+     and print, so the hue-to-meal-type mapping needs to be readable statically.
+     Only types present this week are listed. */
+  .meal-legend {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 10px;
+    row-gap: 2px;
+
+    /* Keys the Calories chart, so it hugs the chart above and clears the Weight
+       divider below rather than sitting midway between the two sections. */
+    margin: 5px 0 9px 0;
+    font-size: 10px;
+    line-height: 1;
+    color: var(--fg-muted);
+  }
+
+  .meal-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .meal-legend-swatch {
+    width: 7px;
+    height: 7px;
+    border-radius: 2px;
+  }
 
   .placeholder {
     color: var(--fg-muted);
@@ -292,8 +326,35 @@
     dinner: "seg-dinner"
   };
 
-  function mealBucketName(mealType) {
-    return typeof mealType === "string" && mealType ? mealType : "(none)";
+  // Server order for meal-type buckets, mirrored here so the ribbon and its key
+  // read in the same sequence the data arrives in. Anything else (the legacy
+  // null bucket included) goes last.
+  var MEAL_TYPE_ORDER = ["breakfast", "lunch", "dinner"];
+
+  // Narrowest segment worth drawing, in user units. Every segment loses 0.75
+  // units to the seam stroke and the 320-unit viewBox renders about 0.94 CSS px
+  // per unit at the shipped width, so this floor still leaves roughly 2.5 CSS px
+  // (~7 device px at 3x) of solid colour -- enough to read as a band. The
+  // previous 1.5 left about 1 CSS px, which read as a stray hairline rather than
+  // a segment; the legacy null bucket was the usual victim, its gray being the
+  // hue closest to the page colour.
+  var MIN_SEG_WIDTH = 3.5;
+
+  function mealSegClass(mealType) {
+    return MEAL_SEG_CLASS[mealType] || "seg-none";
+  }
+
+  // Display name for a bucket, shared by the tooltip and the legend so the two
+  // can never disagree about what a swatch means. The legacy / unrecognized
+  // bucket has no name to show, so it is labelled by its absence.
+  function mealBucketLabel(mealType) {
+    if (typeof mealType !== "string" || !mealType) return "(none)";
+    return mealType.charAt(0).toUpperCase() + mealType.slice(1);
+  }
+
+  function mealTypeRank(mealType) {
+    var index = MEAL_TYPE_ORDER.indexOf(mealType);
+    return index === -1 ? MEAL_TYPE_ORDER.length : index;
   }
 
   // Buckets with calories to draw, in server order (breakfast, lunch, dinner,
@@ -314,60 +375,107 @@
     var buckets = mealBuckets(day);
     if (!buckets.length) return text;
     return text + " \u00b7 " + buckets.map(function (b) {
-      return mealBucketName(b.meal_type) + " " + fmt(b.calories);
+      return mealBucketLabel(b.meal_type) + " " + fmt(b.calories);
     }).join(" / ");
+  }
+
+  // Widths for one day's ribbon segments, summing to barW. Proportional to
+  // calories, except a bucket too thin to read gets pinned to MIN_SEG_WIDTH and
+  // the others give up the difference in proportion to their own calories.
+  // Pinning one bucket can push a neighbour that sat just above the floor under
+  // it, so pin repeatedly until nothing new falls short. Once the bar cannot hold
+  // a legible segment per type, proportions are unreadable anyway and even shares
+  // keep every logged type visible.
+  function ribbonWidths(caloriesList, barW) {
+    var count = caloriesList.length;
+    if (count === 0) return [];
+
+    var total = caloriesList.reduce(function (sum, c) { return sum + c; }, 0);
+    if (!(total > 0)) return caloriesList.map(function () { return 0; });
+
+    var evenSplit = caloriesList.map(function () { return barW / count; });
+    if (count * MIN_SEG_WIDTH > barW) return evenSplit;
+
+    var pinned = caloriesList.map(function () { return false; });
+    for (;;) {
+      var freeCalories = 0;
+      var pinnedCount = 0;
+      caloriesList.forEach(function (calories, i) {
+        if (pinned[i]) pinnedCount++; else freeCalories += calories;
+      });
+      // Unreachable while each type has room to be pinned (pinning them all would
+      // need count * MIN_SEG_WIDTH > barW, ruled out above), but dividing by zero
+      // here would silently hand back NaN widths.
+      if (freeCalories <= 0) return evenSplit;
+
+      var freeWidth = barW - MIN_SEG_WIDTH * pinnedCount;
+      var widths = caloriesList.map(function (calories, i) {
+        return pinned[i] ? MIN_SEG_WIDTH : freeWidth * calories / freeCalories;
+      });
+      var changed = false;
+      widths.forEach(function (w, i) {
+        if (!pinned[i] && w < MIN_SEG_WIDTH) {
+          pinned[i] = true;
+          changed = true;
+        }
+      });
+      if (!changed) return widths;
+    }
   }
 
   // Thin stacked band beneath a day's calorie bar: one segment per meal-type
   // bucket, left-to-right in server order, widths proportional to bucket
-  // calories. A small meal is clamped up to a visible sliver instead of
-  // vanishing, which would quietly break breakfast+lunch+dinner vs the day
-  // total. Days with no buckets (absent from daily_totals) draw nothing.
+  // calories down to the legibility floor handled by ribbonWidths. Days with no
+  // buckets (absent from daily_totals) draw nothing.
   function mealRibbon(svg, day, x, barW, dateStr) {
     var buckets = mealBuckets(day);
     if (!buckets.length) return;
 
-    var totalCalories = buckets.reduce(function (sum, b) { return sum + b.calories; }, 0);
-    if (!(totalCalories > 0)) return;
-
-    var minSliver = 1.5;
-    var widths = buckets.map(function (b) {
-      return barW * b.calories / totalCalories;
-    });
-    var fixedTotal = 0;
-    var isFixed = widths.map(function (w) {
-      if (w < minSliver) {
-        fixedTotal += minSliver;
-        return true;
-      }
-      return false;
-    });
-    var freeCalories = buckets.reduce(function (sum, b, i) {
-      return isFixed[i] ? sum : sum + b.calories;
-    }, 0);
-    var remaining = barW - fixedTotal;
-    // Guard against rounding pathologies: only redistribute while some segment
-    // stayed unfixed and room is left for it; otherwise keep raw widths.
-    if (freeCalories > 0 && remaining > 0) {
-      widths = widths.map(function (w, i) {
-        return isFixed[i] ? minSliver : remaining * buckets[i].calories / freeCalories;
-      });
-    }
+    var widths = ribbonWidths(buckets.map(function (b) { return b.calories; }), barW);
 
     var offset = x;
     buckets.forEach(function (b, i) {
       var seg = document.createElementNS(SVG_NS, "rect");
-      seg.setAttribute("class", "meal-seg " + (MEAL_SEG_CLASS[b.meal_type] || "seg-none"));
+      seg.setAttribute("class", "meal-seg " + mealSegClass(b.meal_type));
       seg.setAttribute("x", offset);
       seg.setAttribute("y", RIBBON_TOP);
       seg.setAttribute("width", widths[i]);
       seg.setAttribute("height", RIBBON_HEIGHT);
       var titleEl = document.createElementNS(SVG_NS, "title");
-      titleEl.textContent = dateStr + " \u00b7 " + mealBucketName(b.meal_type) + ": " + fmt(b.calories) + " cal";
+      titleEl.textContent = dateStr + " \u00b7 " + mealBucketLabel(b.meal_type) + ": " + fmt(b.calories) + " cal";
       seg.appendChild(titleEl);
       svg.appendChild(seg);
       offset += widths[i];
     });
+  }
+
+  // Colour key for the ribbon: the meal types with calories somewhere in the
+  // week, in server order. Empty when nothing was split by meal type, so a week
+  // of pre-attribute data doesn't grow a key for an absent encoding.
+  function mealLegendHtml(data) {
+    var entries = [];
+    var seen = {};
+    (data.nutrients.daily_totals || []).forEach(function (day) {
+      mealBuckets(day).forEach(function (b) {
+        // Empty string stands in for the legacy null bucket, matching the
+        // unrecognised-type fallback in mealSegClass.
+        var key = typeof b.meal_type === "string" ? b.meal_type : "";
+        if (seen[key]) return;
+        seen[key] = true;
+        entries.push({ type: b.meal_type, rank: mealTypeRank(b.meal_type), seen: entries.length });
+      });
+    });
+    if (!entries.length) return "";
+
+    entries.sort(function (a, b) {
+      return a.rank - b.rank || a.seen - b.seen;
+    });
+    var items = entries.map(function (entry) {
+      return '<span class="meal-legend-item">' +
+        '<span class="meal-legend-swatch ' + mealSegClass(entry.type) + '"></span>' +
+        escapeHtml(mealBucketLabel(entry.type)) + "</span>";
+    });
+    return '<div class="meal-legend">' + items.join("") + "</div>";
   }
 
   function caloriesChartSvg(data) {
@@ -547,6 +655,13 @@
     html += '<div class="section-title">Calories</div>';
     appEl.innerHTML = html;
     appEl.appendChild(caloriesChartSvg(data));
+
+    var legendHtml = mealLegendHtml(data);
+    if (legendHtml) {
+      var legend = document.createElement("div");
+      legend.innerHTML = legendHtml;
+      appEl.appendChild(legend);
+    }
 
     var weightSection = document.createElement("div");
     weightSection.innerHTML = '<div class="section-title">Weight</div>';

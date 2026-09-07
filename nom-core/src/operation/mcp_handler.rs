@@ -1242,6 +1242,96 @@ mod tests {
         }
     }
 
+    /// Body of the CSS rule introduced by `selector` (e.g. `".meal-seg"`). The
+    /// declaration blocks are aligned with padding, so the opening brace is located
+    /// rather than assumed to follow the name.
+    fn css_rule_body<'a>(css: &'a str, selector: &str) -> &'a str {
+        let at = css
+            .find(selector)
+            .unwrap_or_else(|| panic!("{selector} rule present"));
+        let open = at + selector.len();
+        let brace = open + css[open..].find('{').expect("opening brace");
+        let close = brace + css[brace..].find('}').expect("closing brace");
+        css[brace + 1..close].trim()
+    }
+
+    /// Numeric (unitless) value of a `property: <number>;` declaration.
+    fn css_declaration(rule: &str, property: &str) -> f64 {
+        let marker = format!("{property}:");
+        let at = rule
+            .find(&marker)
+            .unwrap_or_else(|| panic!("{property} declared in {rule}"))
+            + marker.len();
+        let rest = rule[at..].trim_start();
+        let end = rest.find(';').expect("terminated declaration");
+        rest[..end].trim().parse().expect("numeric declaration")
+    }
+
+    /// Numeric value of a `var NAME = <number>;` constant in the widget's script.
+    fn js_number_constant(source: &str, name: &str) -> f64 {
+        let marker = format!("var {name} = ");
+        let at = source
+            .find(&marker)
+            .unwrap_or_else(|| panic!("{name} constant present"))
+            + marker.len();
+        let rest = source[at..].trim_start();
+        let end = rest.find(';').expect("terminated assignment");
+        rest[..end].trim().parse().expect("numeric constant")
+    }
+
+    /// A ribbon segment has to survive its own seam stroke wide enough to read as
+    /// a band, so the legibility floor and the stroke are one invariant, not two
+    /// unrelated constants. Both are stated in viewBox units; the shipped layout
+    /// paints the 320-unit viewBox across a 300px content box, hence the scale.
+    /// Before TASK-64 the floor was 1.5 units against a 0.75-unit stroke, which
+    /// landed the legacy null bucket at roughly 1 CSS px of solid colour -- present
+    /// in the data, unreadable as a segment.
+    #[test]
+    fn meal_ribbon_segments_survive_their_seam_stroke() {
+        let min_seg = js_number_constant(WEEKLY_PROGRESS_WIDGET_HTML, "MIN_SEG_WIDTH");
+        let stroke = css_declaration(
+            css_rule_body(WEEKLY_PROGRESS_WIDGET_HTML, ".meal-seg"),
+            "stroke-width",
+        );
+        // Each edge of a segment gives half the stroke to the seam it draws.
+        let visible_css_px = (min_seg - stroke) * (300.0 / 320.0);
+        assert!(
+            visible_css_px >= 2.0,
+            "narrowest ribbon segment keeps {visible_css_px:.2} CSS px of fill \
+             (MIN_SEG_WIDTH {min_seg} less the {stroke}-unit seam stroke); under 2 CSS px \
+             a logged meal type reads as a stray hairline rather than a band"
+        );
+    }
+
+    /// The ribbon carries its meaning in hue alone and the tooltip holding the
+    /// same information is invisible to touch and print, so a static colour key
+    /// has to ship with it (TASK-64). Guards the three parts that make the key
+    /// work: a legend renderer, its wiring into `render`, and a rule per hue that
+    /// paints both surfaces -- one that sets only `fill` leaves every swatch
+    /// transparent while the ribbon still looks right.
+    #[test]
+    fn meal_ribbon_ships_a_static_colour_key() {
+        for class in ["seg-breakfast", "seg-lunch", "seg-dinner", "seg-none"] {
+            let rule = css_rule_body(WEEKLY_PROGRESS_WIDGET_HTML, &format!(".{class}"));
+            assert!(
+                rule.contains("fill:") && rule.contains("background:"),
+                ".{class} must paint the SVG segment (fill) and the HTML legend \
+                 swatch (background); found {rule}"
+            );
+        }
+        assert!(
+            WEEKLY_PROGRESS_WIDGET_HTML
+                .matches("mealLegendHtml(")
+                .count()
+                >= 2,
+            "a legend renderer must exist and be called from render()"
+        );
+        assert!(
+            WEEKLY_PROGRESS_WIDGET_HTML.contains(".meal-legend-swatch {"),
+            "legend swatches need their own sizing rule"
+        );
+    }
+
     /// Same as `test_dispatch_read_resource_goal_progress_widget` above, but
     /// for the weight-trend widget's `ui://` resource.
     #[serial_test::serial]
