@@ -319,8 +319,24 @@
     return html;
   }
 
+  // Slim header line: meal type prefixes the date when the payload carries
+  // one. Legacy rows (pre-meal_type) and any payload missing or nulling the
+  // field render the date alone — never the literal "null" and never a
+  // dangling separator. The wire value is lowercase by domain convention, so
+  // it is passed through verbatim rather than remapped for display.
+  function headerHtml(data) {
+    var parts = [];
+    if (typeof data.meal_type === "string" && data.meal_type) {
+      parts.push(escapeHtml(data.meal_type));
+    }
+    if (typeof data.logged_date === "string" && data.logged_date) {
+      parts.push(escapeHtml(data.logged_date));
+    }
+    return parts.join(" &middot; ");
+  }
+
   function render(data) {
-    var html = '<p class="header">' + escapeHtml(data.logged_date || "") + "</p>";
+    var html = '<p class="header">' + headerHtml(data) + "</p>";
     html += '<div class="layout">';
     html += '<div class="portions">' + portionsHtml(data.portions) + "</div>";
     html += '<div class="rings">' + ringsHtml(data.daily_totals) + "</div>";

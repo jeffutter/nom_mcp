@@ -16,6 +16,14 @@
     --under: light-dark(#2563eb, #60a5fa);
     --met: light-dark(#16a34a, #4ade80);
     --over: light-dark(#dc2626, #f87171);
+    /* Meal-type hues for the composition ribbon. A single-hue (violet)
+       lightness ramp keeps the three types separable under colour-vision
+       deficiency and away from the blue/green/red goal-status hues used on
+       the bar directly above; gray is the legacy / unrecognized bucket. */
+    --meal-breakfast: light-dark(#3b0764, #7c3aed);
+    --meal-lunch:     light-dark(#7c3aed, #a78bfa);
+    --meal-dinner:    light-dark(#c4b5fd, #ede9fe);
+    --meal-none:      light-dark(#8f8f99, #71717a);
     --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
 
@@ -75,6 +83,20 @@
   .bar.status-under { fill: var(--under); }
   .bar.status-met { fill: var(--met); }
   .bar.status-over { fill: var(--over); }
+
+  /* Meal-type segments of the composition ribbon under each calorie bar.
+     A hairline in the page colour draws the seams: at ~26x5 user units per
+     day the lightness steps alone wash out, and the palest violet nearly fuses
+     with the status bar above it in dark mode. */
+  .meal-seg.seg-breakfast { fill: var(--meal-breakfast); }
+  .meal-seg.seg-lunch     { fill: var(--meal-lunch); }
+  .meal-seg.seg-dinner    { fill: var(--meal-dinner); }
+  .meal-seg.seg-none      { fill: var(--meal-none); }
+
+  .meal-seg {
+    stroke: var(--bg);
+    stroke-width: 0.75;
+  }
 
   .bar-label {
     font-size: 10px;
@@ -250,9 +272,99 @@
     return consumed > target ? "over" : "under";
   }
 
+  // The ribbon band sits between the bars and the day-of-week labels.
+  var RIBBON_TOP = 58;
+  var RIBBON_HEIGHT = 5;
+  var MEAL_SEG_CLASS = {
+    breakfast: "seg-breakfast",
+    lunch: "seg-lunch",
+    dinner: "seg-dinner"
+  };
+
+  function mealBucketName(mealType) {
+    return typeof mealType === "string" && mealType ? mealType : "(none)";
+  }
+
+  // Buckets with calories to draw, in server order (breakfast, lunch, dinner,
+  // then the legacy null bucket). Zero-calorie buckets are dropped so they
+  // can't eat the minimum-sliver width of a real meal.
+  function mealBuckets(day) {
+    if (!day || !Array.isArray(day.by_meal_type)) return [];
+    return day.by_meal_type.filter(function (b) {
+      return b && typeof b.calories === "number" && b.calories > 0;
+    });
+  }
+
+  // Tooltip wording for a day: the total, plus the meal-type split when there
+  // is one. Carries the information for hosts without hover and for slivers
+  // too thin to point at.
+  function dayTooltip(dateStr, day, calories) {
+    var text = dateStr + ": " + fmt(calories) + " cal";
+    var buckets = mealBuckets(day);
+    if (!buckets.length) return text;
+    return text + " \u00b7 " + buckets.map(function (b) {
+      return mealBucketName(b.meal_type) + " " + fmt(b.calories);
+    }).join(" / ");
+  }
+
+  // Thin stacked band beneath a day's calorie bar: one segment per meal-type
+  // bucket, left-to-right in server order, widths proportional to bucket
+  // calories. A small meal is clamped up to a visible sliver instead of
+  // vanishing, which would quietly break breakfast+lunch+dinner vs the day
+  // total. Days with no buckets (absent from daily_totals) draw nothing.
+  function mealRibbon(svg, day, x, barW, dateStr) {
+    var buckets = mealBuckets(day);
+    if (!buckets.length) return;
+
+    var totalCalories = buckets.reduce(function (sum, b) { return sum + b.calories; }, 0);
+    if (!(totalCalories > 0)) return;
+
+    var minSliver = 1.5;
+    var widths = buckets.map(function (b) {
+      return barW * b.calories / totalCalories;
+    });
+    var fixedTotal = 0;
+    var isFixed = widths.map(function (w) {
+      if (w < minSliver) {
+        fixedTotal += minSliver;
+        return true;
+      }
+      fixedTotal += w;
+      return false;
+    });
+    var freeCalories = buckets.reduce(function (sum, b, i) {
+      return isFixed[i] ? sum : sum + b.calories;
+    }, 0);
+    var remaining = barW - fixedTotal;
+    // Guard against rounding pathologies: only redistribute while some segment
+    // stayed unfixed and room is left for it; otherwise keep raw widths.
+    if (freeCalories > 0 && remaining > 0) {
+      widths = widths.map(function (w, i) {
+        return isFixed[i] ? minSliver : remaining * buckets[i].calories / freeCalories;
+      });
+    }
+
+    var offset = x;
+    buckets.forEach(function (b, i) {
+      var seg = document.createElementNS(SVG_NS, "rect");
+      seg.setAttribute("class", "meal-seg " + (MEAL_SEG_CLASS[b.meal_type] || "seg-none"));
+      seg.setAttribute("x", offset);
+      seg.setAttribute("y", RIBBON_TOP);
+      seg.setAttribute("width", widths[i]);
+      seg.setAttribute("height", RIBBON_HEIGHT);
+      var titleEl = document.createElementNS(SVG_NS, "title");
+      titleEl.textContent = dateStr + " \u00b7 " + mealBucketName(b.meal_type) + ": " + fmt(b.calories) + " cal";
+      seg.appendChild(titleEl);
+      svg.appendChild(seg);
+      offset += widths[i];
+    });
+  }
+
   function caloriesChartSvg(data) {
-    var width = 320, height = 72;
-    var padLeft = 8, padRight = 8, padTop = 4, padBottom = 16;
+    // Height grows 72 -> 80 to make room for the ribbon band; padBottom grows
+    // with it so chartH stays 52 and the calorie bars themselves don't move.
+    var width = 320, height = 80;
+    var padLeft = 8, padRight = 8, padTop = 4, padBottom = 24;
     var chartW = width - padLeft - padRight;
     var chartH = height - padTop - padBottom;
 
@@ -303,9 +415,11 @@
       // day gets at least a 1px bar so its <title> tooltip stays hoverable.
       rect.setAttribute("height", v > 0 ? Math.max(1, barH) : 0);
       var titleEl = document.createElementNS(SVG_NS, "title");
-      titleEl.textContent = d + ": " + fmt(v) + " cal";
+      titleEl.textContent = dayTooltip(d, byDate[d], v);
       rect.appendChild(titleEl);
       svg.appendChild(rect);
+
+      mealRibbon(svg, byDate[d], x, barW, d);
 
       var label = document.createElementNS(SVG_NS, "text");
       label.setAttribute("class", "bar-label");

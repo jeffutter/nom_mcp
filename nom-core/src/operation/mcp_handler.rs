@@ -1238,6 +1238,9 @@ mod tests {
         // Size reporting is load-bearing for hosts that size the iframe from
         // the widget's own reports; guard against it being lost.
         assert!(text.contains("ui/notifications/size-changed"));
+        // The header shows the log_meal result's meal type when present; guard
+        // against that binding being dropped (TASK-62.5).
+        assert!(text.contains("meal_type"));
         // The widget must be self-contained: no external script/style fetches
         // (the restrictive default CSP blocks them anyway).
         assert!(!text.contains("<script src"));
