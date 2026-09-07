@@ -26,6 +26,7 @@ use crate::clock::Clock;
 use crate::error::ErrorData;
 use crate::food::NutrientValues;
 use crate::meal::compute_portion_macros;
+use crate::meal_type::MealType;
 use crate::operation::{Operation, Surfaces};
 use crate::storage::Connection;
 use crate::storage::lock_probe::probe_db_lock;
@@ -120,6 +121,9 @@ struct PlannedPortion {
 struct PlannedMeal {
     logged_at: String,
     logged_date: String,
+    /// Stamped from the fixture's scheduled hour so demos and widgets show
+    /// realistic meal types (the fixture times are wall-clock by design).
+    meal_type: MealType,
     /// Materialized meal totals — the sums the readers (`get_goal_progress`,
     /// `get_weekly_progress`) actually query.
     totals: NutrientValues,
@@ -175,6 +179,11 @@ fn build_plan(today: NaiveDate) -> SeedPlan {
         meals.push(PlannedMeal {
             logged_at,
             logged_date,
+            meal_type: MealType::from_local_hour(
+                time[..2]
+                    .parse::<u32>()
+                    .expect("fixture time must start with HH"),
+            ),
             totals,
             portions: planned_portions,
         });
@@ -362,8 +371,8 @@ impl Operation for SeedData {
                 conn.execute(
                     r#"INSERT INTO meals (id, logged_at, logged_date, total_calories,
                                           total_protein_g, total_carbs_g, total_fat_g,
-                                          total_fiber_g)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#,
+                                          total_fiber_g, meal_type)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
                     (
                         meal_id,
                         meal.logged_at.as_str(),
@@ -373,6 +382,7 @@ impl Operation for SeedData {
                         meal.totals.carbs_g,
                         meal.totals.fat_g,
                         meal.totals.fiber_g,
+                        meal.meal_type.as_str(),
                     ),
                 )
                 .await

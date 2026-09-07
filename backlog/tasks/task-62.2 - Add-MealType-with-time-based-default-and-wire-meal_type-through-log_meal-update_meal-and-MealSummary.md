@@ -3,10 +3,11 @@ id: TASK-62.2
 title: >-
   Add MealType with time-based default and wire meal_type through log_meal,
   update_meal and MealSummary
-status: Dev Ready
-assignee: []
+status: Done
+assignee:
+  - '@ralph'
 created_date: '2026-09-07 01:28'
-updated_date: '2026-09-07 01:30'
+updated_date: '2026-09-07 02:14'
 labels:
   - task
   - planned
@@ -41,12 +42,12 @@ Out of scope: summary grouping (TASK-62.3), docs/glossary (TASK-62.4), widgets (
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A logged Meal stores exactly one of breakfast/lunch/dinner; when no argument is supplied it is derived from the logged instant read in the shared Clock's timezone
-- [ ] #2 Boundary hours 05:00, 11:00, 16:00 (and 00:00) map to the documented windows, exhaustively tested over all 24 local hours
-- [ ] #3 An explicit meal_type argument overrides the derivation, and an invalid value yields ErrorData::validation with field == "meal_type" on CLI, HTTP, MCP and remote-CLI
-- [ ] #4 Pre-existing rows with NULL meal_type read back as JSON null with no data loss and no query-time inference
-- [ ] #5 MealSummary carries meal_type, so search_meals, get_meals_by_date_range and the log_meal response expose it on every surface
-- [ ] #6 update_meal accepts an override, re-derives when only logged_at changes, and leaves the column untouched when neither is supplied
+- [x] #1 A logged Meal stores exactly one of breakfast/lunch/dinner; when no argument is supplied it is derived from the logged instant read in the shared Clock's timezone
+- [x] #2 Boundary hours 05:00, 11:00, 16:00 (and 00:00) map to the documented windows, exhaustively tested over all 24 local hours
+- [x] #3 An explicit meal_type argument overrides the derivation, and an invalid value yields ErrorData::validation with field == "meal_type" on CLI, HTTP, MCP and remote-CLI
+- [x] #4 Pre-existing rows with NULL meal_type read back as JSON null with no data loss and no query-time inference
+- [x] #5 MealSummary carries meal_type, so search_meals, get_meals_by_date_range and the log_meal response expose it on every surface
+- [x] #6 update_meal accepts an override, re-derives when only logged_at changes, and leaves the column untouched when neither is supplied
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -159,3 +160,15 @@ nix develop .#ci -c cargo run -p nom-mcp --bin nom-mcp -- get_meals_by_date_rang
 
 AC #1-#4 hold on all four surfaces, AC #6 holds for meal queries, legacy rows read back as `null`, and the full CI set is green.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented per plan: new nom-core/src/meal_type.rs (MealType enum, from_local_hour over BREAKFAST_HOURS/LUNCH_HOURS consts, parse/as_str; exhaustive 24-hour + boundary unit tests); Clock::local_hour mirroring logged_date; LogMeal resolves meal_type from the SAME DateTime<Utc> used for logged_date (explicit Option<String> arg validated by hand -> ErrorData::validation(field=meal_type), matching calories_direction precedent); insert_meal appends meal_type column last; MealSummary gains meal_type: Option<String> WITHOUT skip_serializing_if so legacy rows emit JSON null; UpdateMeal resolution order = explicit > re-derive-on-logged_at-change > untouched; seed fixtures stamp meal_type from each fixture hour. Verified beyond unit tests: CLI smoke (explicit/derived/invalid rc=4 field meal_type under America/Chicago clock proving TZ sensitivity), HTTP POST /api/log_meal (ErrorData field + derived value), MCP tools/list shows meal_type in log_meal/update_meal inputSchema; remote-CLI shares renderer+route (remote_e2e green). Full suite: 368 nextest + doctests pass, clippy -D warnings clean.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+MealType (breakfast/lunch/dinner) wired end-to-end: time-based default from shared Clock TZ, explicit overrides with Validation-class field='meal_type' rejection, meal_type on MealSummary (legacy rows serialize as null), update_meal override/re-derive/untouched semantics, seed fixtures stamped. All 6 ACs verified across CLI, HTTP, MCP, remote-CLI.
+<!-- SECTION:FINAL_SUMMARY:END -->

@@ -27,6 +27,7 @@ pub mod food;
 pub mod goal;
 pub mod logging;
 pub mod meal;
+pub mod meal_type;
 pub mod operation;
 pub mod seed;
 pub mod storage;

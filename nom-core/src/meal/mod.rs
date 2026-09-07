@@ -17,6 +17,7 @@ use serde::Deserialize;
 use crate::clock::Clock;
 use crate::error::ErrorData;
 use crate::food::NutrientValues;
+use crate::meal_type::MealType;
 use crate::operation::Operation;
 use crate::storage::Connection;
 
@@ -89,6 +90,11 @@ pub struct MealSummary {
     #[serde(rename = "adjustment", skip_serializing_if = "Option::is_none")]
     pub adjustment: Option<Adjustment>,
     pub totals: MealTotals,
+    /// breakfast/lunch/dinner, or null for rows logged before meal types
+    /// existed. Deliberately NOT skip_serializing_if — readers always see
+    /// the key.
+    #[serde(rename = "meal_type")]
+    pub meal_type: Option<String>,
 }
 
 /// A portion summary within a meal.
@@ -246,6 +252,17 @@ async fn lookup_food(
     }
 }
 
+/// Parse a user-supplied meal type, rejecting anything but the three
+/// canonical values with a Validation error naming the `meal_type` field.
+fn parse_meal_type_arg(raw: &str) -> Result<MealType, ErrorData> {
+    MealType::parse(raw).ok_or_else(|| {
+        ErrorData::validation(
+            "meal_type",
+            format!("must be one of 'breakfast', 'lunch', 'dinner', got '{raw}'"),
+        )
+    })
+}
+
 /// Insert a meal row and return its ID.
 async fn insert_meal(
     conn: &Connection,
@@ -253,13 +270,14 @@ async fn insert_meal(
     logged_date: &str,
     totals: &MealTotals,
     adjustment: Option<&Adjustment>,
+    meal_type: MealType,
 ) -> Result<i64, ErrorData> {
     let sql = r#"
         INSERT INTO meals (logged_at, logged_date, total_calories, total_protein_g,
                            total_carbs_g, total_fat_g, total_fiber_g,
                            adjustment_calories, adjustment_protein_g, adjustment_carbs_g,
-                           adjustment_fat_g, adjustment_fiber_g)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                           adjustment_fat_g, adjustment_fiber_g, meal_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING id
     "#;
     let adj_cal: Option<f64> = adjustment.and_then(|a| a.calories);
@@ -286,6 +304,7 @@ async fn insert_meal(
             adj_carb,
             adj_fat,
             adj_fiber,
+            meal_type.as_str(),
         ))
         .await
         .map_err(|e| ErrorData::storage_failure(format!("insert failed: {e}")))?;
@@ -421,7 +440,7 @@ async fn build_meal_summary(conn: &Connection, meal_id: i64) -> Result<MealSumma
         SELECT id, logged_at, logged_date, total_calories, total_protein_g,
                total_carbs_g, total_fat_g, total_fiber_g,
                adjustment_calories, adjustment_protein_g, adjustment_carbs_g,
-               adjustment_fat_g, adjustment_fiber_g
+               adjustment_fat_g, adjustment_fiber_g, meal_type
         FROM meals WHERE id = ?
     "#;
     let mut stmt = conn
@@ -482,6 +501,22 @@ async fn build_meal_summary(conn: &Connection, meal_id: i64) -> Result<MealSumma
     let adj_fiber: Option<f64> = meal_row
         .get(12)
         .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?;
+
+    // Legacy rows (pre-v2 migration) store NULL and read back as JSON null —
+    // no backfill, no query-time inference.
+    let meal_type: Option<String> = match meal_row
+        .get_value(13)
+        .map_err(|e| ErrorData::storage_failure(format!("read error: {e}")))?
+    {
+        turso::Value::Text(s) => Some(s),
+        turso::Value::Null => None,
+        other => {
+            return Err(ErrorData::storage_failure(format!(
+                "unexpected value type for meal_type: {:?}",
+                other
+            )));
+        }
+    };
 
     let adjustment = if adj_cal.is_some()
         || adj_prot.is_some()
@@ -596,6 +631,7 @@ async fn build_meal_summary(conn: &Connection, meal_id: i64) -> Result<MealSumma
         portions,
         adjustment,
         totals,
+        meal_type,
     })
 }
 
@@ -613,6 +649,11 @@ struct LogMealRequest {
     /// Optional timestamp override (ISO 8601). Defaults to now.
     #[serde(rename = "logged_at", skip_serializing_if = "Option::is_none")]
     pub logged_at: Option<String>,
+    /// Which meal this is: 'breakfast', 'lunch' or 'dinner'. Defaults from
+    /// the logged time in the server's timezone: breakfast 05:00-10:59,
+    /// lunch 11:00-15:59, dinner 16:00-04:59.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meal_type: Option<String>,
 }
 
 pub struct LogMeal {
@@ -675,8 +716,8 @@ impl Operation for LogMeal {
         #[cfg(not(test))]
         let conn = Connection::open().await?;
 
-        // Determine logged_at and logged_date
-        let (logged_at_str, logged_date_str) = if let Some(ref ts) = req.logged_at {
+        // Determine the logged instant and its materialized date.
+        let (logged_dt, logged_at_str, logged_date_str) = if let Some(ref ts) = req.logged_at {
             let dt: DateTime<Utc> = ts.parse().map_err(|_| {
                 ErrorData::validation(
                     "logged_at",
@@ -684,15 +725,24 @@ impl Operation for LogMeal {
                 )
             })?;
             (
+                dt,
                 format!("{}", dt.format("%Y-%m-%dT%H:%M:%SZ")),
                 Clock::format_date(self.clock.logged_date(&dt)),
             )
         } else {
             let now = chrono::Utc::now();
             (
+                now,
                 format!("{}", now.format("%Y-%m-%dT%H:%M:%SZ")),
-                Clock::format_date(self.clock.today()),
+                Clock::format_date(self.clock.logged_date(&now)),
             )
+        };
+
+        // Explicit type wins; otherwise derive from the SAME instant used for
+        // logged_date, read in the Clock's timezone.
+        let meal_type = match req.meal_type.as_deref() {
+            Some(raw) => parse_meal_type_arg(raw)?,
+            None => MealType::from_local_hour(self.clock.local_hour(&logged_dt)),
         };
 
         // Begin transaction
@@ -714,6 +764,7 @@ impl Operation for LogMeal {
                 &logged_date_str,
                 &totals,
                 req.adjustment.as_ref(),
+                meal_type,
             )
             .await?;
 
@@ -757,6 +808,7 @@ impl Operation for LogMeal {
                     "meal_id": meal_id,
                     "logged_at": logged_at_str,
                     "logged_date": logged_date_str,
+                    "meal_type": summary.meal_type,
                     "totals": totals,
                     "portions": summary.portions,
                     "daily_totals": daily_totals,
@@ -788,6 +840,11 @@ struct UpdateMealRequest {
     /// Optional timestamp override.
     #[serde(rename = "logged_at", skip_serializing_if = "Option::is_none")]
     pub logged_at: Option<String>,
+    /// Set the meal type ('breakfast', 'lunch' or 'dinner'). Omit to keep the
+    /// stored value — unless logged_at changes, in which case the type is
+    /// re-derived from the new time in the server's timezone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meal_type: Option<String>,
 }
 
 pub struct UpdateMeal {
@@ -833,6 +890,13 @@ impl Operation for UpdateMeal {
         let req: UpdateMealRequest = serde_json::from_value((*args).clone())
             .map_err(|e| ErrorData::validation("request", format!("invalid request: {e}")))?;
 
+        // Validate before touching the DB; explicit types win over any
+        // re-derivation below.
+        let explicit_meal_type = match req.meal_type.as_deref() {
+            Some(raw) => Some(parse_meal_type_arg(raw)?),
+            None => None,
+        };
+
         #[cfg(test)]
         let conn = if let Some(ref path) = self.db_path {
             Connection::open_at(path).await?
@@ -868,16 +932,33 @@ impl Operation for UpdateMeal {
             .map_err(|e| ErrorData::storage_failure(format!("transaction begin failed: {e}")))?;
 
         let result = (async {
-            // Update logged_at if provided
+            // Update logged_at if provided. Moving a meal re-derives its
+            // type from the new instant (a stale label after moving a meal
+            // from 20:00 to 08:00 would be plainly wrong); an explicit type
+            // overrides that.
             if let Some(ref ts) = req.logged_at {
                 let dt: DateTime<Utc> = ts.parse().map_err(|_| {
                     ErrorData::validation("logged_at", format!("invalid datetime format: {}", ts))
                 })?;
                 let logged_at_str = format!("{}", dt.format("%Y-%m-%dT%H:%M:%SZ"));
                 let logged_date_str = Clock::format_date(self.clock.logged_date(&dt));
+                let meal_type = explicit_meal_type
+                    .unwrap_or_else(|| MealType::from_local_hour(self.clock.local_hour(&dt)));
                 conn.execute(
-                    "UPDATE meals SET logged_at = ?, logged_date = ? WHERE id = ?",
-                    (logged_at_str, logged_date_str, req.meal_id),
+                    "UPDATE meals SET logged_at = ?, logged_date = ?, meal_type = ? WHERE id = ?",
+                    (
+                        logged_at_str,
+                        logged_date_str,
+                        meal_type.as_str(),
+                        req.meal_id,
+                    ),
+                )
+                .await
+                .map_err(|e| ErrorData::storage_failure(format!("update failed: {e}")))?;
+            } else if let Some(meal_type) = explicit_meal_type {
+                conn.execute(
+                    "UPDATE meals SET meal_type = ? WHERE id = ?",
+                    (meal_type.as_str(), req.meal_id),
                 )
                 .await
                 .map_err(|e| ErrorData::storage_failure(format!("update failed: {e}")))?;
@@ -2479,5 +2560,294 @@ mod tests {
             .unwrap();
 
         assert!(result.as_array().unwrap().is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // TASK-62.2: meal_type write path, derivation, and read-back
+    // -----------------------------------------------------------------------
+
+    /// Log one 100g portion of `food_id`, optionally overriding logged_at /
+    /// meal_type; returns the operation result.
+    async fn log_one_portion(
+        clock: Clock,
+        db: &TempDb,
+        food_id: i64,
+        args_extra: serde_json::Value,
+    ) -> Result<serde_json::Value, ErrorData> {
+        let mut args = serde_json::json!({
+            "portions": [{"food_id": food_id, "quantity": 100.0, "quantity_mode": "grams"}]
+        });
+        if let Some(extra) = args_extra.as_object() {
+            args.as_object_mut().unwrap().extend(extra.clone());
+        }
+        LogMeal::new(clock)
+            .with_db_path(db.path.clone())
+            .execute_json(Arc::new(args))
+            .await
+    }
+
+    /// AC#1/#2: with no argument, the type derives from the logged instant's
+    /// hour — including the documented boundary hours 05, 11, 16 and 00.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_log_meal_defaults_meal_type_from_logged_hour() {
+        let db = TempDb::new().await;
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        let food_id = seed_food(&conn, "Rice").await.unwrap();
+        drop(conn);
+
+        let clock = Clock { tz: chrono_tz::UTC };
+        let cases = [
+            ("2026-06-01T05:00:00Z", "breakfast"),
+            ("2026-06-01T10:59:59Z", "breakfast"),
+            ("2026-06-01T11:00:00Z", "lunch"),
+            ("2026-06-01T15:59:59Z", "lunch"),
+            ("2026-06-01T16:00:00Z", "dinner"),
+            ("2026-06-01T23:30:00Z", "dinner"),
+            ("2026-06-01T00:00:00Z", "dinner"),
+            ("2026-06-01T04:59:59Z", "dinner"),
+        ];
+        for (logged_at, expected) in cases {
+            let result = log_one_portion(
+                clock,
+                &db,
+                food_id,
+                serde_json::json!({"logged_at": logged_at}),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                result["meal_type"].as_str(),
+                Some(expected),
+                "logged_at {logged_at} should default to {expected}"
+            );
+        }
+    }
+
+    /// AC#1: derivation reads the hour through the Clock's timezone, not UTC
+    /// — the same UTC instant yields different types under different clocks.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_log_meal_meal_type_uses_clock_timezone() {
+        let db = TempDb::new().await;
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        let food_id = seed_food(&conn, "Rice").await.unwrap();
+        drop(conn);
+
+        // 14:00 UTC = 10:00 EDT in New York: lunch under a UTC clock,
+        // breakfast under a New York clock.
+        let utc_instant = "2026-06-15T14:00:00Z";
+        let utc_clock = Clock { tz: chrono_tz::UTC };
+        let ny_clock = Clock {
+            tz: "America/New_York".parse().unwrap(),
+        };
+
+        let r = log_one_portion(
+            utc_clock,
+            &db,
+            food_id,
+            serde_json::json!({"logged_at": utc_instant}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(r["meal_type"].as_str(), Some("lunch"));
+
+        let r = log_one_portion(
+            ny_clock,
+            &db,
+            food_id,
+            serde_json::json!({"logged_at": utc_instant}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(r["meal_type"].as_str(), Some("breakfast"));
+    }
+
+    /// AC#3: an explicit argument overrides the clock-derived default and
+    /// persists through the read surface.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_log_meal_explicit_meal_type_overrides_derivation() {
+        let db = TempDb::new().await;
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        let food_id = seed_food(&conn, "Rice").await.unwrap();
+        drop(conn);
+
+        let clock = Clock { tz: chrono_tz::UTC };
+        let result = log_one_portion(
+            clock,
+            &db,
+            food_id,
+            serde_json::json!({"logged_at": "2026-06-01T20:00:00Z", "meal_type": "lunch"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["meal_type"].as_str(), Some("lunch"));
+
+        // Read back through build_meal_summary via GetMealsByDateRange.
+        let op = GetMealsByDateRange::new().with_db_path(db.path.clone());
+        let rows = op
+            .execute_json(Arc::new(serde_json::json!({
+                "start_date": "2026-06-01",
+                "end_date": "2026-06-01"
+            })))
+            .await
+            .unwrap();
+        assert_eq!(rows[0]["meal_type"].as_str(), Some("lunch"));
+    }
+
+    /// AC#3: invalid values are rejected with field == "meal_type" (not
+    /// "request") on both write operations.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_invalid_meal_type_reports_meal_type_field() {
+        let db = TempDb::new().await;
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        let food_id = seed_food(&conn, "Rice").await.unwrap();
+        drop(conn);
+
+        let clock = Clock { tz: chrono_tz::UTC };
+        let err = log_one_portion(
+            clock,
+            &db,
+            food_id,
+            serde_json::json!({"meal_type": "snack"}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.category, crate::error::ErrorCategory::Validation);
+        assert_eq!(err.field.as_deref(), Some("meal_type"));
+
+        let err = UpdateMeal::new(clock)
+            .with_db_path(db.path.clone())
+            .execute_json(Arc::new(serde_json::json!({
+                "meal_id": 1,
+                "meal_type": "Snack"
+            })))
+            .await
+            .unwrap_err();
+        assert_eq!(err.category, crate::error::ErrorCategory::Validation);
+        assert_eq!(err.field.as_deref(), Some("meal_type"));
+    }
+
+    /// AC#4/#5: a legacy row (NULL meal_type) reads back as JSON null — the
+    /// key present, no inference — and editing its logged_at fills it in.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_legacy_null_meal_type_reads_as_null_and_update_fills_it() {
+        let db = TempDb::new().await;
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        conn.execute(
+            "INSERT INTO meals (logged_at, logged_date, total_calories, total_protein_g, \
+             total_carbs_g, total_fat_g, total_fiber_g) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "2026-06-01T12:00:00Z",
+                "2026-06-01",
+                500.0_f64,
+                20.0_f64,
+                50.0_f64,
+                10.0_f64,
+                5.0_f64,
+            ),
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        let op = GetMealsByDateRange::new().with_db_path(db.path.clone());
+        let rows = op
+            .execute_json(Arc::new(serde_json::json!({
+                "start_date": "2026-06-01",
+                "end_date": "2026-06-01"
+            })))
+            .await
+            .unwrap();
+        let meal = &rows[0];
+        assert!(
+            meal.get("meal_type").is_some_and(|v| v.is_null()),
+            "legacy row must emit an explicit null meal_type, got {meal}"
+        );
+
+        // Editing only the time gives the legacy row a real type.
+        let clock = Clock { tz: chrono_tz::UTC };
+        let updated = UpdateMeal::new(clock)
+            .with_db_path(db.path.clone())
+            .execute_json(Arc::new(serde_json::json!({
+                "meal_id": 1,
+                "logged_at": "2026-06-01T07:30:00Z"
+            })))
+            .await
+            .unwrap();
+        assert_eq!(updated["meal_type"].as_str(), Some("breakfast"));
+    }
+
+    /// AC#6: update_meal honors an explicit override, re-derives when only
+    /// logged_at changes, and leaves the column untouched when neither is
+    /// supplied.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn test_update_meal_meal_type_resolution_order() {
+        let db = TempDb::new().await;
+        let conn = Connection::open_at(&db.path).await.unwrap();
+        let food_id = seed_food(&conn, "Rice").await.unwrap();
+        drop(conn);
+
+        let clock = Clock { tz: chrono_tz::UTC };
+        let logged = log_one_portion(
+            clock,
+            &db,
+            food_id,
+            serde_json::json!({"logged_at": "2026-06-01T08:00:00Z"}),
+        )
+        .await
+        .unwrap();
+        let meal_id = logged["meal_id"].as_i64().unwrap();
+        assert_eq!(logged["meal_type"].as_str(), Some("breakfast"));
+
+        // Neither argument: an unrelated patch leaves the type alone.
+        let updated = UpdateMeal::new(clock)
+            .with_db_path(db.path.clone())
+            .execute_json(Arc::new(serde_json::json!({
+                "meal_id": meal_id,
+                "adjustment": {"calories": 10.0}
+            })))
+            .await
+            .unwrap();
+        assert_eq!(updated["meal_type"].as_str(), Some("breakfast"));
+
+        // Explicit override only.
+        let updated = UpdateMeal::new(clock)
+            .with_db_path(db.path.clone())
+            .execute_json(Arc::new(serde_json::json!({
+                "meal_id": meal_id,
+                "meal_type": "dinner"
+            })))
+            .await
+            .unwrap();
+        assert_eq!(updated["meal_type"].as_str(), Some("dinner"));
+
+        // Only logged_at moves: re-derived from the new instant (09:00 UTC
+        // under a UTC clock is breakfast), discarding the stale 'dinner'.
+        let updated = UpdateMeal::new(clock)
+            .with_db_path(db.path.clone())
+            .execute_json(Arc::new(serde_json::json!({
+                "meal_id": meal_id,
+                "logged_at": "2026-06-01T09:00:00Z"
+            })))
+            .await
+            .unwrap();
+        assert_eq!(updated["meal_type"].as_str(), Some("breakfast"));
+
+        // Both supplied: the explicit argument wins over re-derivation.
+        let updated = UpdateMeal::new(clock)
+            .with_db_path(db.path.clone())
+            .execute_json(Arc::new(serde_json::json!({
+                "meal_id": meal_id,
+                "logged_at": "2026-06-01T09:00:00Z",
+                "meal_type": "lunch"
+            })))
+            .await
+            .unwrap();
+        assert_eq!(updated["meal_type"].as_str(), Some("lunch"));
     }
 }

@@ -70,6 +70,17 @@ impl Clock {
         utc_datetime.with_timezone(&self.tz).date_naive()
     }
 
+    /// Local wall-clock hour of `utc_datetime` in the resolved timezone.
+    ///
+    /// Derived at write time alongside `logged_date` (e.g. to default a
+    /// Meal's type); historical values are never recomputed retroactively.
+    /// The UTC → local projection is infallible — only local → UTC can be
+    /// ambiguous — so this needs no `Result`.
+    pub fn local_hour(&self, utc_datetime: &DateTime<Utc>) -> u32 {
+        use chrono::Timelike;
+        utc_datetime.with_timezone(&self.tz).hour()
+    }
+
     /// Format a `NaiveDate` as `"YYYY-MM-DD"` for SQLite storage.
     pub fn format_date(date: NaiveDate) -> String {
         date.format("%Y-%m-%d").to_string()
@@ -111,6 +122,20 @@ mod tests {
             .into();
         let logged = clock.logged_date(&utc_dt);
         assert_eq!(logged, NaiveDate::from_ymd_opt(2024, 6, 14).unwrap());
+    }
+
+    #[test]
+    fn test_clock_local_hour_uses_resolved_timezone() {
+        // 2024-06-15T03:00 UTC = 23:00 the previous day in New York (EDT, UTC-4).
+        let utc_dt: DateTime<Utc> = DateTime::parse_from_rfc3339("2024-06-15T03:00:00Z")
+            .unwrap()
+            .into();
+        let ny_clock = Clock {
+            tz: "America/New_York".parse().unwrap(),
+        };
+        assert_eq!(ny_clock.local_hour(&utc_dt), 23);
+        let utc_clock = Clock { tz: chrono_tz::UTC };
+        assert_eq!(utc_clock.local_hour(&utc_dt), 3);
     }
 
     #[test]
