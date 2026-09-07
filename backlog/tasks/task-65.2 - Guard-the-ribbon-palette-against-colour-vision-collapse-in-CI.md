@@ -4,7 +4,7 @@ title: Guard the ribbon palette against colour-vision collapse in CI
 status: Blocked
 assignee: []
 created_date: '2026-09-07 15:29'
-updated_date: '2026-09-07 19:27'
+updated_date: '2026-09-07 21:44'
 labels:
   - task
   - planned
@@ -136,15 +136,9 @@ created: 2026-09-07 19:27
 ---
 Planning correction from TASK-65.2.1 research (verified against colorspacious cvd.py, coloraide filters/cvd.py, colour-science tests/test_delta_e.py, and a local re-run of /tmp/t652_verify.py). Three defects in this plan that would have produced red-but-correct code: (1) the Machado severity-1.0 deutan and tritan matrices are mis-transcribed - correct digits are deutan [[0.367322,0.860646,-0.227968],[0.280085,0.672501,0.047413],[-0.011820,0.042940,0.968881]] and tritan [[1.255528,-0.076749,-0.178779],[-0.078411,0.930809,0.147602],[0.004733,0.691367,0.303900]], matching colorspacious and coloraide digit-for-digit; protan was right. (2) There is no feColorMatrix / filter / dichromacy constant anywhere under nom-core/assets (weight_trend_widget.html is 371 lines of render code); the Blink constants remembered at "lines 243-248" live only in the throwaway spike harness /tmp/t65-spike/harness.html:91, so any parity assert must pin them as test data rather than cite shipped markup. (3) The Sharma CIEDE2000 table carried here is corrupt and does not reproduce (worst error 1.75): rows 1-6 use b* = -82.7485, not -82.7775, and four pairs are mis-partnered; the verified 33-row set with expected values is pinned in TASK-65.2.1's implementation plan, where two independent implementations reproduce every published value to 4.9e-5. Everything else measured here did reproduce exactly with the corrected matrices - light-scheme lunch/dinner protanopia 5.05 worst pair, dark worst 15.61, Okabe-Ito floors protan 6.61 / deutan 6.04 / tritan 5.66, gamma-vs-linear dE76 11.40 vs 24.99 - so the conclusions and the one-hex fix stand unchanged.
 ---
-TASK-65.2.1 executed. One more correction to inherit, on top of the three already recorded here: the simulation SPACE behind this plan's separation measurements was wrong, so every dE figure below "conclusions ... stand unchanged" must be re-derived before it is used as a threshold.
 
-The planning oracle (/tmp/t652_verify.py simulate()) applied the linear->XYZ matrix to gamma-encoded values, i.e. it simulated in gamma space while reporting linear. Tell: that pipeline moves neutral #808080 from L* 53.59 to L* 76.19, impossible for a matrix whose rows sum to 1 (neutrals must survive dichromacy simulation). Measured with the matrix genuinely in linear light and clamping after the multiply, verified against coloraide 8.12.1 (agreement ~1e-3) and reproduced by the shipped Rust primitives in nom-core/src/operation/mcp_handler.rs:
-
-- motivating pair #a78bfa vs #71717a under deuteranopia: dE76 50.00 / dE00 25.38, not 24.99. The 24.99 figure is the GAMMA-space result (24.64 measured), so the plan's gamma-vs-linear comparison was measuring a bug, not a design choice.
-- shipped light scheme worst pair: dE00 7.72 (protanopia, #7c3aed vs #a855f7), not 5.05.
-- shipped dark scheme worst pair: dE00 14.86 (tritanopia, #7c3aed vs #71717a), not 15.61.
-- Okabe-Ito calibration floors: protan 12.25, deutan 11.61, tritan 10.87, not 6.61 / 6.04 / 5.66.
-
-Consequence for this plan's Step 2: the calibration ratio changes materially (smallest shipped separation 7.72 against an Okabe-Ito floor of 10.87 rather than 5.66 against 5.66-ish), so the "one hex must be retuned" conclusion is no longer established -- TASK-65.2.2 must re-derive whether any pair fails a defensible floor before touching --meal-lunch. The corrected machinery itself is done and merged: colour_math in mcp_handler.rs tests, with delta_e_2000 (coefficient 0.20, not the circulating 0.10), lab_from_hex, simulate_cvd and eight known-answer tests.
+created: 2026-09-07 21:44
+---
+Planning correction for this parent's plan, measured through the shipped colour_math primitives (TASK-65.2.1's own handoff note already supersedes six figures here; TASK-65.2.2's plan now carries the full corrected matrix and the candidate sweep). Authoritative values: Okabe-Ito floors protan 12.25 / deutan 11.61 / tritan 10.87. Shipped light scheme fails TWO conditions, not one - lunch/dinner measures 7.72 under protanopia and 10.33 under deuteranopia; dark passes everywhere (worst 14.86 tritan). The parent's 5.05/6.33/9.15 and 6.61/6.04/5.66 all came from the gamma-space pipeline that 65.2.1 disproved. Consequence for AC#4: the inherited one-hex fix (#6d28d9) clears protanopia by only 0.88, while purple-700 #7e22ce clears every floor by >=1.98 at negligible cost elsewhere, so 65.2.2 ships #7e22ce and rewrites the ramp comment to put the single hue break between breakfast and lunch. Two harness facts 65.2.2 verified end-to-end, both of which contradict how prior tickets rendered the widget: get_weekly_progress is Surfaces::MCP-only, so there is no POST /api/get_weekly_progress to curl - capture the payload by piping initialize + initialized + tools/call into serve stdio; and the legacy ribbon bucket is a meal row with meal_type IS NULL, because migration_v2.sql adds CHECK (meal_type IN ('breakfast','lunch','dinner')), which rejects any unrecognised string - relevant to TASK-67's bucket-detection cleanup too.
 ---
 <!-- COMMENTS:END -->
