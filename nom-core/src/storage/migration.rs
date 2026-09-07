@@ -8,13 +8,22 @@ use super::connection::{Connection, StorageError};
 /// Initial migration SQL (v1).
 const MIGRATION_V1: &str = include_str!("schema.sql");
 
-/// SHA-256 hash of v1 migration SQL (computed at build time via sha2 crate,
-/// but we compute it at runtime here to avoid another dependency for now).
-fn hash_v1() -> String {
+/// Migration v2: appends nullable `meals.meal_type` as the last column.
+const MIGRATION_V2: &str = include_str!("migration_v2.sql");
+
+/// Ordered list of all known migrations as `(version, sql)` pairs.
+/// A migration is pending when its version is greater than the max version
+/// recorded in `_migrations`; pending ones are applied in ascending order.
+fn migrations() -> Vec<(i32, &'static str)> {
+    vec![(1, MIGRATION_V1), (2, MIGRATION_V2)]
+}
+
+/// SHA-256 hash of a migration's SQL, as lowercase hex.
+fn hash_sql(sql: &str) -> String {
     use sha2::{Digest, Sha256};
     use std::fmt::Write;
     let mut hasher = Sha256::new();
-    hasher.update(MIGRATION_V1);
+    hasher.update(sql);
     let result = hasher.finalize();
     let mut s = String::with_capacity(result.len() * 2);
     for &byte in &result {
@@ -99,21 +108,22 @@ async fn get_max_version(conn: &Connection) -> Result<i32, StorageError> {
 }
 
 async fn apply_migration(conn: &mut Connection, current_version: i32) -> Result<(), StorageError> {
-    // Currently only v1 exists. Future migrations are added here.
-    if current_version >= 1 {
-        return Ok(());
+    for (version, sql) in migrations() {
+        if version <= current_version {
+            continue;
+        }
+
+        // Execute this migration's SQL
+        conn.execute_batch(sql).await?;
+
+        // Record migration version and hash
+        let hash = hash_sql(sql);
+        conn.execute(
+            "INSERT OR IGNORE INTO _migrations (version, hash) VALUES (?, ?)",
+            (version as i64, hash.as_str()),
+        )
+        .await?;
     }
-
-    // Execute v1 migration SQL
-    conn.execute_batch(MIGRATION_V1).await?;
-
-    // Record migration version and hash
-    let hash = hash_v1();
-    conn.execute(
-        "INSERT OR IGNORE INTO _migrations (version, hash) VALUES (1, ?)",
-        (hash.as_str(),),
-    )
-    .await?;
 
     Ok(())
 }
