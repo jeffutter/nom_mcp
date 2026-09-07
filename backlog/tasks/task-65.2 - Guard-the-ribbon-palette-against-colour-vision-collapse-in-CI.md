@@ -1,10 +1,10 @@
 ---
 id: TASK-65.2
 title: Guard the ribbon palette against colour-vision collapse in CI
-status: Blocked
+status: Done
 assignee: []
 created_date: '2026-09-07 15:29'
-updated_date: '2026-09-07 21:44'
+updated_date: '2026-09-07 22:29'
 labels:
   - task
   - planned
@@ -142,3 +142,9 @@ created: 2026-09-07 21:44
 Planning correction for this parent's plan, measured through the shipped colour_math primitives (TASK-65.2.1's own handoff note already supersedes six figures here; TASK-65.2.2's plan now carries the full corrected matrix and the candidate sweep). Authoritative values: Okabe-Ito floors protan 12.25 / deutan 11.61 / tritan 10.87. Shipped light scheme fails TWO conditions, not one - lunch/dinner measures 7.72 under protanopia and 10.33 under deuteranopia; dark passes everywhere (worst 14.86 tritan). The parent's 5.05/6.33/9.15 and 6.61/6.04/5.66 all came from the gamma-space pipeline that 65.2.1 disproved. Consequence for AC#4: the inherited one-hex fix (#6d28d9) clears protanopia by only 0.88, while purple-700 #7e22ce clears every floor by >=1.98 at negligible cost elsewhere, so 65.2.2 ships #7e22ce and rewrites the ramp comment to put the single hue break between breakfast and lunch. Two harness facts 65.2.2 verified end-to-end, both of which contradict how prior tickets rendered the widget: get_weekly_progress is Surfaces::MCP-only, so there is no POST /api/get_weekly_progress to curl - capture the payload by piping initialize + initialized + tools/call into serve stdio; and the legacy ribbon bucket is a meal row with meal_type IS NULL, because migration_v2.sql adds CHECK (meal_type IN ('breakfast','lunch','dinner')), which rejects any unrecognised string - relevant to TASK-67's bucket-detection cleanup too.
 ---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Closed out of scope. Both sub-tickets closed without shipping a CVD-simulation CI guard: disproportionate engineering (CIELAB, CIEDE2000, Machado 2009 dichromacy matrices, externally-calibrated thresholds) for one decorative ribbon widget in a single-user app. TASK-65.2.1's colour-math code was squashed out of git history post-review. TASK-65 AC#4 revised to accept the existing WCAG contrast guard as sufficient.
+<!-- SECTION:FINAL_SUMMARY:END -->

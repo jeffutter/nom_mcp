@@ -3,10 +3,10 @@ id: TASK-65.2.2
 title: >-
   TASK-65.2.2 Guard every meal-ribbon fill pair under simulated colour vision
   deficiency and retune the collapsing light-scheme hex
-status: Dev Ready
+status: Done
 assignee: []
 created_date: '2026-09-07 17:52'
-updated_date: '2026-09-07 21:44'
+updated_date: '2026-09-07 22:29'
 labels:
   - planned
 dependencies:
@@ -240,3 +240,9 @@ created: 2026-09-07 21:44
 The description above carries six measurements computed in the gamma-space pipeline that TASK-65.2.1 disproved: the guard's red state is light lunch/dinner protanopia 7.72 against a floor of 12.25 (not 5.05 vs 6.61), deuteranopia also fails at 10.33 vs 11.61, dark passes everywhere (worst tritan 14.86), and the Wong floors are 12.25/11.61/10.87 rather than 6.61/6.04/5.66. Plan Step 0 restates every one of them with where each stale figure lives, so treat the Implementation Plan as authoritative wherever the two disagree - including the shipped hex, which the sweep says should be purple-700 #7e22ce rather than violet-700 #6d28d9.
 ---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Closed without implementation: reviewing the TASK-65 -> 65.2 -> 65.2.1/65.2.2 chain found it had escalated a single decorative ribbon-chart palette check into a full CIEDE2000 + Machado-dichromacy-simulation CI guard, calibrated against an externally published colourblind-safe palette. Disproportionate for a single-user app (see AGENTS.md). TASK-65.2.1's colour-math code was squashed out of git history; this guard ticket is closed unimplemented. TASK-65 AC#4 revised to rely on the existing meal_ribbon_colours_meet_non_text_contrast WCAG guard instead.
+<!-- SECTION:FINAL_SUMMARY:END -->

@@ -6,9 +6,10 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-09-07 17:51'
-updated_date: '2026-09-07 20:18'
+updated_date: '2026-09-07 22:29'
 labels:
   - planned
+  - reverted
 dependencies: []
 parent_task_id: TASK-65.2
 ordinal: 77200
@@ -262,6 +263,8 @@ Worst pairwise simulated dE00 over the four shipped ribbon fills per scheme, and
 - Okabe-Ito floors: protan **12.25** (`#0072B2` vs `#CC79A7`), deutan **11.61** (`#E69F00` vs `#F0E442`), tritan **10.87** (`#E69F00` vs `#CC79A7`)
 
 These replace the parent plan's light 5.05 / dark 15.61 and Okabe-Ito 6.61 / 6.04 / 5.66, which were computed in the mislabelled space and are roughly half the true separations. Consequences for 65.2.2: the calibration ratio changes materially, and the claimed one-hex light-scheme `--meal-lunch` retune must be re-derived rather than inherited -- whether any pair actually fails a defensible floor is now an open question again, since the smallest shipped separation (7.72) is compared against an Okabe-Ito floor of 10.87 rather than 5.66. Recorded as comments on TASK-65.2 and TASK-65.2.2.
+
+Reverted post-review 2026-09-07: the CIELAB/CIEDE2000/Machado-dichromacy colour_math test module this ticket added to nom-core/src/operation/mcp_handler.rs was squashed out of git history (commits e010982, 84630da, b2b6f0f dropped via `git rebase --onto`) as disproportionate scope for a single-user app guarding one decorative ribbon widget. The code was correct and its tests passed, but the ~770 lines of academic colour science it took to get there was not worth the cost for what it protects. Superseded by closing TASK-65.2/TASK-65.2.2 and revising TASK-65 AC#4 to rely on the pre-existing WCAG contrast guard.
 <!-- SECTION:NOTES:END -->
 
 ## Comments

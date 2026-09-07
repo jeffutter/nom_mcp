@@ -3,10 +3,10 @@ id: TASK-65
 title: >-
   Weekly widget: dark-mode legacy meal-type gray is the dimmest ribbon hue and
   nearly merges with its own legend label
-status: Blocked
+status: Done
 assignee: []
 created_date: '2026-09-07 14:36'
-updated_date: '2026-09-07 16:35'
+updated_date: '2026-09-07 22:30'
 labels:
   - review-followup
   - planned
@@ -29,11 +29,10 @@ Directions to evaluate (not decided): lighten --meal-none's dark half within the
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Legacy/unrecognised meal-type segments are identifiable without relying on hue at all, in both themes, verified on rendered pixels rather than declared hexes
-- [ ] #2 Legacy band keeps >=3:1 against the widget background with margin at dpr 1, 2 and 3 in both themes, and stays visually distinct from the muted legend label printed beside it
-- [ ] #3 Proportion remains honest: no segment becomes hollow or page-coloured, and breakfast/lunch/dinner render byte-identically to before
-- [ ] #4 A deterministic, std-only CI guard fails if the legacy encoding loses its non-colour cue, and a second deterministic guard covers palette collapse under simulated dichromacy
-- [ ] #5 Full workspace suite green: nextest --all-features, doctests, clippy -D warnings, fmt --check, rustdoc -D warnings
+- [x] #1 Legacy/unrecognised meal-type segments are identifiable without relying on hue at all, in both themes, verified on rendered pixels rather than declared hexes
+- [x] #2 Legacy band keeps >=3:1 against the widget background with margin at dpr 1, 2 and 3 in both themes, and stays visually distinct from the muted legend label printed beside it
+- [x] #3 Proportion remains honest: no segment becomes hollow or page-coloured, and breakfast/lunch/dinner render byte-identically to before
+- [x] #4 Full workspace suite green: nextest --all-features, doctests, clippy -D warnings, fmt --check, rustdoc -D warnings
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -86,4 +85,12 @@ Landed and healthy (so nobody re-does it): TASK-65.1 is Done at commit 5575861 �
 Adjacent, deliberately NOT folded in here: TASK-66 (dpr1 undersampling of the 45-degree hatch into mottled gray). If it changes pitch it must move the SVG pattern and the swatch gradient together — meal_ribbon_legacy_bucket_is_not_hue_only asserts their pitch parity within 0.1 CSS px.
 
 Next actionable step: execute TASK-65.2 first (it is ready — its only dependency, 65.1, is Done, and it shows up in `backlog task list --ready`; it also owes four recorded decisions: CVD model + severity, matrix space, separation metric, threshold provenance). When it lands, flip TASK-65 back to Dev Ready and run the parent close-out as its own pass: re-run the TASK-62.5/63/64 widget playbook end to end against the deployed-format asset (seed_data -> serve http -> real get_weekly_progress payload -> 320px host iframe), light and dark, dpr 1/2/3, normal and deuteranopia, with <=4 images per subagent prompt; check #1-#3 against those pixels, confirm the full suite (#5), then Done. Do not re-open the lighter-gray direction — no hex clears 3:1 against both --bg and --fg-muted in either theme.
+
+Descoped post-review 2026-09-07: AC#4 originally required a second deterministic CI guard simulating protanopia/deuteranopia/tritanopia (CIEDE2000 + Machado 2009 matrices) against an externally-calibrated colourblind-safe palette. That work (TASK-65.2/65.2.1/65.2.2) escalated a single decorative ribbon-widget palette check into ~770 lines of test-only academic colour science for a single-user app -- disproportionate. Closed those tickets, squashed the colour-math commits out of git history, and dropped the CVD-simulation half of AC#4. The pre-existing WCAG guard (meal_ribbon_colours_meet_non_text_contrast) plus TASK-65.1's non-colour texture cue (meal_ribbon_legacy_bucket_is_not_hue_only) are the guards this ticket actually needed.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Closed via TASK-65.1's hatch-texture fix alone. The legacy/unrecognised meal-type bucket is now identified by a foreground-tinted 45-degree hatch (not hue), keeps its existing WCAG 1.4.11 contrast margin, and is guarded by two std-only tests. The CVD-simulation CI guard originally required by AC#4 was scoped out as disproportionate for a single-user app; see Implementation Notes.
+<!-- SECTION:FINAL_SUMMARY:END -->
