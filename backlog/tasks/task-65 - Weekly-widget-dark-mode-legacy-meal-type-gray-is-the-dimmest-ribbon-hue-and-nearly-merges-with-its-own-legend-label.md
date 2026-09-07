@@ -3,10 +3,10 @@ id: TASK-65
 title: >-
   Weekly widget: dark-mode legacy meal-type gray is the dimmest ribbon hue and
   nearly merges with its own legend label
-status: Dev Ready
+status: Blocked
 assignee: []
 created_date: '2026-09-07 14:36'
-updated_date: '2026-09-07 15:38'
+updated_date: '2026-09-07 16:35'
 labels:
   - review-followup
   - planned
@@ -73,3 +73,17 @@ Re-run the TASK-62.5/63/64 widget playbook end to end against the deployed-forma
 
 Out of scope, recorded so nobody re-opens it here: raising `--meal-none` toward `--fg-muted` (moves it *into* the label), any `prefers-color-scheme` or `--color-scheme` change (the single-source-of-truth `light-dark()` model from TASK-62.5 stands), and changing MIN_SEG_WIDTH or the seam stroke contract.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+PARKED (Blocked) by ralph run at 2026-09-07 ~16:34 UTC — cannot be closed without executing a second ticket.
+
+Blocker, from the code rather than from ticket status: AC #4 requires two deterministic std-only guards. Only one exists. `grep -n 'fn meal_ribbon' nom-core/src/operation/mcp_handler.rs` lists exactly four ribbon tests — meal_ribbon_colours_meet_non_text_contrast (1229), meal_ribbon_segments_survive_their_seam_stroke (1290), meal_ribbon_ships_a_static_colour_key (1313), meal_ribbon_legacy_bucket_is_not_hue_only (1381) — and no CVD matrix / deuteranopia / protanopia / tritanopia code exists anywhere in nom-core. The simulated-dichromacy collapse guard is the entire scope of TASK-65.2, which is unstarted. Executing it here would mean doing two tickets in one run, so this ticket is parked instead of partially checked off.
+
+Landed and healthy (so nobody re-does it): TASK-65.1 is Done at commit 5575861 — the SVG hatch paint server and legend-swatch gradient mirror are in nom-core/assets/weekly_progress_widget.html (.seg-none 112, hatch CSS rules 122-123, swatch mirror 130, pattern builder 462-465). Verified at HEAD: cargo nextest run --workspace --all-features meal_ribbon -> 4 passed, 0 failed. ACs #1-#3 were verified on rendered pixels during 65.1; the parent's own re-verification is deliberately gated on 'when both land' per the plan, so it belongs after 65.2, not now.
+
+Adjacent, deliberately NOT folded in here: TASK-66 (dpr1 undersampling of the 45-degree hatch into mottled gray). If it changes pitch it must move the SVG pattern and the swatch gradient together — meal_ribbon_legacy_bucket_is_not_hue_only asserts their pitch parity within 0.1 CSS px.
+
+Next actionable step: execute TASK-65.2 first (it is ready — its only dependency, 65.1, is Done, and it shows up in `backlog task list --ready`; it also owes four recorded decisions: CVD model + severity, matrix space, separation metric, threshold provenance). When it lands, flip TASK-65 back to Dev Ready and run the parent close-out as its own pass: re-run the TASK-62.5/63/64 widget playbook end to end against the deployed-format asset (seed_data -> serve http -> real get_weekly_progress payload -> 320px host iframe), light and dark, dpr 1/2/3, normal and deuteranopia, with <=4 images per subagent prompt; check #1-#3 against those pixels, confirm the full suite (#5), then Done. Do not re-open the lighter-gray direction — no hex clears 3:1 against both --bg and --fg-muted in either theme.
+<!-- SECTION:NOTES:END -->
