@@ -16,13 +16,17 @@
     --under: light-dark(#2563eb, #60a5fa);
     --met: light-dark(#16a34a, #4ade80);
     --over: light-dark(#dc2626, #f87171);
-    /* Meal-type hues for the composition ribbon. A single-hue (violet)
-       lightness ramp keeps the three types separable under colour-vision
-       deficiency and away from the blue/green/red goal-status hues used on
-       the bar directly above; gray is the legacy / unrecognized bucket. */
+    /* Meal-type hues for the composition ribbon: a violet lightness ramp
+       (violet-950 / -600 / purple-500) broken once at dinner, whose extra
+       magenta rotation is what stops it fusing with lunch. The ramp keeps the
+       three types separable under colour-vision deficiency and away from the
+       blue/green/red goal-status hues used on the bar directly above; gray is
+       the legacy / unrecognized bucket. Every value here must hold >= 3:1
+       against --bg in its own scheme (WCAG 1.4.11);
+       meal_ribbon_colours_meet_non_text_contrast enforces it. */
     --meal-breakfast: light-dark(#3b0764, #7c3aed);
     --meal-lunch:     light-dark(#7c3aed, #a78bfa);
-    --meal-dinner:    light-dark(#c4b5fd, #ede9fe);
+    --meal-dinner:    light-dark(#a855f7, #ede9fe);
     --meal-none:      light-dark(#8f8f99, #71717a);
     --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
@@ -87,7 +91,14 @@
   /* Meal-type segments of the composition ribbon under each calorie bar.
      A hairline in the page colour draws the seams: at ~26x5 user units per
      day the lightness steps alone wash out, and the palest violet nearly fuses
-     with the status bar above it in dark mode. */
+     with the status bar above it in dark mode.
+
+     This stroke is load-bearing, not decorative. Adjacent fills are close in
+     lightness -- 2.63:1 (breakfast|lunch), 1.44:1 (lunch|dinner), 1.24:1
+     (dinner|none) in light mode -- so a seam reads as a seam solely because each
+     fill meets a page-coloured line that itself clears 3:1 against both
+     neighbours (W3C technique G209). Thinning or removing it breaks boundary
+     legibility whatever the fills are. */
   .meal-seg.seg-breakfast { fill: var(--meal-breakfast); }
   .meal-seg.seg-lunch     { fill: var(--meal-lunch); }
   .meal-seg.seg-dinner    { fill: var(--meal-dinner); }

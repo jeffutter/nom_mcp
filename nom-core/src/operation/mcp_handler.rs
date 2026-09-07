@@ -1185,6 +1185,63 @@ mod tests {
         assert!(text.contains("by_meal_type"));
     }
 
+    /// Parses a `--name: light-dark(<light>, <dark>);` custom property out of the
+    /// widget CSS. Alignment padding after the property name varies, so trim both
+    /// halves.
+    fn light_dark_pair(css: &str, name: &str) -> (String, String) {
+        let marker = format!("--{name}:");
+        let at = css.find(&marker).expect("property present") + marker.len();
+        let rest = &css[at..];
+        let open = "light-dark(";
+        let start = rest.find(open).expect("light-dark() value") + open.len();
+        let close = start + rest[start..].find(')').expect("closing paren");
+        let (light, dark) = rest[start..close].split_once(',').expect("two colours");
+        (light.trim().to_owned(), dark.trim().to_owned())
+    }
+
+    /// WCAG 2.x relative luminance of a `#rrggbb` colour.
+    fn relative_luminance(hex: &str) -> f64 {
+        let digits = hex.trim_start_matches('#');
+        let channel = |i: usize| {
+            let raw = u8::from_str_radix(&digits[i..i + 2], 16).expect("hex pair") as f64 / 255.0;
+            if raw <= 0.039_28 {
+                raw / 12.92
+            } else {
+                ((raw + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4)
+    }
+
+    /// WCAG 2.x contrast ratio between two `#rrggbb` colours.
+    fn contrast_ratio(a: &str, b: &str) -> f64 {
+        let (x, y) = (relative_luminance(a), relative_luminance(b));
+        let (hi, lo) = if x > y { (x, y) } else { (y, x) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    /// SC 1.4.11: every meal-type ribbon fill must hold >= 3:1 against the page
+    /// background it sits on, in both schemes. The pale light-mode dinner value
+    /// measured 1.85:1 and shipped anyway (TASK-63) because nothing measured it --
+    /// axe-core has no non-text contrast rule, so screenshot review was the only
+    /// check, and 1.85:1 does not look wrong to the eye.
+    #[test]
+    fn meal_ribbon_colours_meet_non_text_contrast() {
+        let (bg_light, bg_dark) = light_dark_pair(WEEKLY_PROGRESS_WIDGET_HTML, "bg");
+        for name in ["meal-breakfast", "meal-lunch", "meal-dinner", "meal-none"] {
+            let (light, dark) = light_dark_pair(WEEKLY_PROGRESS_WIDGET_HTML, name);
+            let modes = [("light", (&light, &bg_light)), ("dark", (&dark, &bg_dark))];
+            for (mode, (fill, bg)) in modes {
+                let ratio = contrast_ratio(fill, bg);
+                assert!(
+                    ratio >= 3.0,
+                    "--{name} {mode} {fill} vs --bg {bg} = {ratio:.2}:1, below the \
+                     3:1 minimum for non-text graphical elements (WCAG 1.4.11)"
+                );
+            }
+        }
+    }
+
     /// Same as `test_dispatch_read_resource_goal_progress_widget` above, but
     /// for the weight-trend widget's `ui://` resource.
     #[serial_test::serial]
