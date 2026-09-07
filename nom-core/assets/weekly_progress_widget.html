@@ -21,8 +21,10 @@
        magenta rotation is what stops it fusing with lunch. The ramp keeps the
        three types separable under colour-vision deficiency and away from the
        blue/green/red goal-status hues used on the bar directly above; gray is
-       the legacy / unrecognized bucket. Every value here must hold >= 3:1
-       against --bg in its own scheme (WCAG 1.4.11);
+       the legacy / unrecognized bucket, and it carries a 45-degree hatch on top
+       of this fill because hue was its only cue (WCAG 1.4.1) -- see the hatch
+       rules below. Every value here must hold >= 3:1 against --bg in its own
+       scheme (WCAG 1.4.11);
        meal_ribbon_colours_meet_non_text_contrast enforces it. */
     --meal-breakfast: light-dark(#3b0764, #7c3aed);
     --meal-lunch:     light-dark(#7c3aed, #a78bfa);
@@ -98,7 +100,8 @@
      (dinner|none) in light mode -- so a seam reads as a seam solely because each
      fill meets a page-coloured line that itself clears 3:1 against both
      neighbours (W3C technique G209). Thinning or removing it breaks boundary
-     legibility whatever the fills are. */
+     legibility whatever the fills are. The legacy bucket's hatch lives inside
+     the fill, under this stroke, and leaves it untouched. */
   /* One rule per hue serves both surfaces that name a meal type: the ribbon
      segments (fill, ignored by HTML) and the legend swatches (background,
      ignored by SVG). Keeping them together is what stops the key drifting away
@@ -106,7 +109,28 @@
   .seg-breakfast { fill: var(--meal-breakfast); background: var(--meal-breakfast); }
   .seg-lunch     { fill: var(--meal-lunch);     background: var(--meal-lunch); }
   .seg-dinner    { fill: var(--meal-dinner);    background: var(--meal-dinner); }
-  .seg-none      { fill: var(--meal-none);      background: var(--meal-none); }
+  .seg-none      { fill: url(#meal-none-hatch); background: var(--meal-none); }
+
+  /* The legacy bucket cannot carry its meaning in hue: its gray lands between
+     the page background and the muted label printed beside it, and TASK-65
+     measured that no hex clears 3:1 against both in either scheme. Its cue is
+     texture -- a 45-degree hatch over an opaque base that *is* the untouched
+     --meal-none fill, so proportion stays honest. The stripe tints from --fg,
+     bright in dark mode and dark in light mode, the one choice that lifts the
+     band against the page in both halves at once (rendered 6.02:1 dark /
+     4.99:1 light at dpr1, versus 3.71:1 / 3.20:1 flat). */
+  .meal-none-hatch-base   { fill: var(--meal-none); }
+  .meal-none-hatch-stripe { fill: color-mix(in srgb, var(--fg) 65%, transparent); }
+
+  /* The legend swatch mirrors the ribbon texture. The SVG pitch is 1.6 viewBox
+     units, which paints as 1.5 CSS px at the shipped 300/320 scale; gradient
+     stops are already CSS px, so the two numbers differ on purpose --
+     meal_ribbon_legacy_bucket_is_not_hue_only compares them through the scale. */
+  .meal-legend-swatch.seg-none {
+    background-image: repeating-linear-gradient(45deg,
+      color-mix(in srgb, var(--fg) 65%, transparent) 0 0.66px,
+      transparent 0.66px 1.5px);
+  }
 
   .meal-seg {
     stroke: var(--bg);
@@ -165,10 +189,11 @@
   .weight-status.status-met { color: var(--met); }
   .weight-status.status-over { color: var(--over); }
 
-  /* Colour key for the composition ribbon. Segments carry their meaning in hue
-     alone, and the tooltip holding the same information is invisible to touch
-     and print, so the hue-to-meal-type mapping needs to be readable statically.
-     Only types present this week are listed. */
+  /* Colour key for the composition ribbon. Hues carry the meal-type mapping and
+     the tooltip holding the same information is invisible to touch and print, so
+     the mapping needs to be readable statically; the legacy entry's swatch
+     mirrors the ribbon's hatch for the same reason the ribbon has one. Only
+     types present this week are listed. */
   .meal-legend {
     display: flex;
     flex-wrap: wrap;
@@ -423,6 +448,25 @@
     }
   }
 
+  // Paint server for the legacy bucket's texture: a 45-degree hatch over an
+  // opaque --meal-none base. Written as literal markup so the guard test can
+  // read the geometry it enforces. Built inside the consuming chart svg rather
+  // than a hidden global one -- a url(#id) reference across svg elements does
+  // paint in Blink, but local defs delete the cross-document risk (WebKit
+  // hosts) and keep the asset self-contained. The 1.6-unit pitch renders as
+  // 1.5 CSS px at the shipped 300/320 scale; the legend gradient mirrors that
+  // rendered pitch, not this number.
+  function mealNoneHatchDefs() {
+    var defs = document.createElementNS(SVG_NS, "defs");
+    defs.innerHTML =
+      '<pattern id="meal-none-hatch" patternUnits="userSpaceOnUse" ' +
+      'width="1.6" height="1.6" patternTransform="rotate(45)">' +
+      '<rect class="meal-none-hatch-base" width="1.6" height="1.6"/>' +
+      '<rect class="meal-none-hatch-stripe" width="0.66" height="1.6"/>' +
+      "</pattern>";
+    return defs;
+  }
+
   // Thin stacked band beneath a day's calorie bar: one segment per meal-type
   // bucket, left-to-right in server order, widths proportional to bucket
   // calories down to the legibility floor handled by ribbonWidths. Days with no
@@ -506,6 +550,7 @@
     var svg = document.createElementNS(SVG_NS, "svg");
     svg.setAttribute("class", "chart");
     svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+    svg.appendChild(mealNoneHatchDefs());
 
     if (target !== undefined && target !== null) {
       var y = padTop + chartH - (target / maxVal) * chartH;

@@ -1332,6 +1332,122 @@ mod tests {
         );
     }
 
+    /// Numeric value of an XML-style `name="<number>"` attribute.
+    fn xml_number_attribute(text: &str, name: &str) -> f64 {
+        let marker = format!("{name}=\"");
+        let at = text
+            .find(&marker)
+            .unwrap_or_else(|| panic!("{name} attribute present in {text}"))
+            + marker.len();
+        let rest = &text[at..];
+        let end = rest.find('"').expect("closed attribute");
+        rest[..end].trim().parse().expect("numeric attribute")
+    }
+
+    /// Every `<number>px` literal in a chunk of CSS, so numeric invariants can
+    /// be compared across declarations written in different notations.
+    fn css_px_values(text: &str) -> Vec<f64> {
+        let mut values = Vec::new();
+        let mut rest = text;
+        while let Some(at) = rest.find("px") {
+            let digits: String = rest[..at]
+                .trim_end()
+                .chars()
+                .rev()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            if let Ok(value) = digits.parse::<f64>() {
+                values.push(value);
+            }
+            rest = &rest[at + 2..];
+        }
+        values
+    }
+
+    /// The legacy / unrecognized meal-type bucket cannot carry its meaning in
+    /// hue: its gray sits between the page background and the muted legend label
+    /// printed right beside it, and TASK-65 measured that no single hex clears
+    /// 3:1 against both in either scheme. Its cue must therefore survive being
+    /// seen without colour -- a hatch over the untouched fill, mirrored on the
+    /// legend swatch. Guards the parts that make the texture real rather than
+    /// decorative: a paint server whose base rect *is* `--meal-none`, a
+    /// `.seg-none` that paints through it while keeping the plain background for
+    /// the HTML swatch, and a swatch mirror whose stripe period matches the
+    /// pattern's rendered period instead of copying its raw viewBox number.
+    #[test]
+    fn meal_ribbon_legacy_bucket_is_not_hue_only() {
+        // The segment paints through the pattern (SVG) and keeps a flat
+        // background (HTML swatch); dropping either leaves one surface flat.
+        let seg_none = css_rule_body(WEEKLY_PROGRESS_WIDGET_HTML, ".seg-none");
+        assert!(
+            seg_none.contains("url(#") && seg_none.contains("background:"),
+            ".seg-none must paint SVG segments through a hatch pattern (fill: url(#...)) \
+             and keep a background for the HTML legend swatch; found {seg_none}"
+        );
+
+        // The paint server: userSpaceOnUse so the pitch is in viewBox units,
+        // rotated 45 degrees, built in the consuming svg so inline refs never
+        // cross documents.
+        let id_at = WEEKLY_PROGRESS_WIDGET_HTML
+            .find("id=\"meal-none-hatch\"")
+            .expect("hatch paint server defined");
+        let after_id = &WEEKLY_PROGRESS_WIDGET_HTML[id_at..];
+        let pattern = &after_id[..after_id.find("</pattern>").expect("closed pattern")];
+        assert!(
+            pattern.contains("patternUnits=\"userSpaceOnUse\"") && pattern.contains("rotate(45)"),
+            "hatch pattern must tile in viewBox units and sit at 45 degrees; found {pattern}"
+        );
+        let pattern_width = xml_number_attribute(pattern, "width");
+
+        // The base rect carries the meal hue unchanged; the stripe derives from
+        // --fg, which is bright in dark mode and dark in light mode -- the one
+        // tint that improves both halves at once.
+        assert!(
+            css_rule_body(WEEKLY_PROGRESS_WIDGET_HTML, ".meal-none-hatch-base")
+                .contains("var(--meal-none)"),
+            "the hatch base must be the untouched --meal-none fill, so proportion \
+             stays honest under the texture"
+        );
+        assert!(
+            css_rule_body(WEEKLY_PROGRESS_WIDGET_HTML, ".meal-none-hatch-stripe")
+                .contains("var(--fg)"),
+            "the hatch stripe must derive from --fg so it reads in both schemes"
+        );
+
+        // The defs builder must exist and be reached from the chart, the same
+        // way the colour-key test proves the legend renderer is called.
+        assert!(
+            WEEKLY_PROGRESS_WIDGET_HTML
+                .matches("mealNoneHatchDefs(")
+                .count()
+                >= 2,
+            "the hatch paint server must be built and appended from the chart svg"
+        );
+
+        // The legend swatch mirrors the ribbon texture with a CSS gradient, and
+        // the two textures must be the same texture: the pattern pitch is in
+        // viewBox units painted across a 300px content box (scale 300/320),
+        // while gradient stops are already CSS px. Copying the raw 1.6 into the
+        // gradient silently ships two different stripe densities.
+        let swatch = css_rule_body(WEEKLY_PROGRESS_WIDGET_HTML, ".meal-legend-swatch.seg-none");
+        assert!(
+            swatch.contains("repeating-linear-gradient") && swatch.contains("45deg"),
+            "the legacy legend swatch must mirror the ribbon hatch with a 45-degree \
+             repeating gradient; found {swatch}"
+        );
+        let gradient_period = css_px_values(swatch).into_iter().fold(0.0_f64, f64::max);
+        let pattern_period_css_px = pattern_width * (300.0 / 320.0);
+        assert!(
+            (gradient_period - pattern_period_css_px).abs() <= 0.1,
+            "legend swatch stripes repeat every {gradient_period} CSS px but the SVG \
+             pattern repeats every {pattern_period_css_px} CSS px at the shipped scale; \
+             the two surfaces must show one texture"
+        );
+    }
+
     /// Same as `test_dispatch_read_resource_goal_progress_widget` above, but
     /// for the weight-trend widget's `ui://` resource.
     #[serial_test::serial]
